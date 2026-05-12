@@ -21,7 +21,6 @@ import {
   workUnitAsyncStorage,
   getStagedRenderingController,
 } from '../../server/app-render/work-unit-async-storage.external'
-import { RenderStage } from '../../server/app-render/staged-rendering'
 
 import {
   MetadataBoundary,
@@ -76,7 +75,9 @@ export function createMetadataComponents({
       if (workUnitStore) {
         const stagedRendering = getStagedRenderingController(workUnitStore)
         if (stagedRendering) {
-          await stagedRendering.waitForStage(RenderStage.FallbackStatic)
+          await stagedRendering.waitForStage(
+            stagedRendering.getFirstLateStage()
+          )
         }
       }
     }
@@ -127,7 +128,9 @@ export function createMetadataComponents({
       if (workUnitStore) {
         const stagedRendering = getStagedRenderingController(workUnitStore)
         if (stagedRendering) {
-          await stagedRendering.waitForStage(RenderStage.FallbackStatic)
+          await stagedRendering.waitForStage(
+            stagedRendering.getFirstLateStage()
+          )
         }
       }
     }

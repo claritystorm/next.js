@@ -69,6 +69,35 @@ export function isEarlyRenderStage(stage: RenderStage): boolean {
   }
 }
 
+export function isFallbackRenderStage(stage: RenderStage): boolean {
+  switch (stage) {
+    case RenderStage.FallbackEarlyStatic:
+    case RenderStage.FallbackStatic:
+    case RenderStage.FallbackEarlyRuntime:
+    case RenderStage.FallbackRuntime: {
+      return true
+    }
+    case RenderStage.EarlyStatic:
+    case RenderStage.EarlyRuntime:
+    case RenderStage.Static:
+    case RenderStage.Runtime: {
+      return false
+    }
+    case RenderStage.Before:
+    case RenderStage.Dynamic:
+    case RenderStage.Abandoned: {
+      return false
+    }
+    default: {
+      stage satisfies never
+      throw new InvariantError(`Invalid render stage: ${stage}`)
+    }
+  }
+}
+
+const FIRST_FALLBACK_LATE_STAGE = RenderStage.FallbackStatic
+const FIRST_LATE_STAGE = RenderStage.Static
+
 export type AdvanceableRenderStage = Exclude<
   RenderStage,
   RenderStage.Before | RenderStage.Abandoned
@@ -97,7 +126,8 @@ export class StagedRenderingController {
   constructor(
     private abortSignal: AbortSignal | null,
     private abandonController: AbortController | null,
-    private shouldTrackSyncIO: boolean
+    private shouldTrackSyncIO: boolean,
+    public readonly hasFallbacks: boolean
   ) {
     if (abortSignal) {
       abortSignal.addEventListener(
@@ -293,6 +323,23 @@ export class StagedRenderingController {
         `====================== ${RenderStage[this.currentStage]} -> ${RenderStage[targetStage]} ======================`
       )
     }
+    if (this.currentStage === RenderStage.Before) {
+      // As a sanity check, verify that:
+      // - if the controller is marked as using fallbacks, the first stage we move into is a fallback stage
+      // - if the controller is marked as NOT using fallbacks, the first stage we move into is a NOT fallback stage
+      if (this.hasFallbacks !== isFallbackRenderStage(targetStage)) {
+        if (this.hasFallbacks) {
+          throw new InvariantError(
+            `Expected a render with fallbacks to start with a fallback stage, got ${RenderStage[targetStage]}`
+          )
+        } else {
+          throw new InvariantError(
+            `Expected a render without fallbacks to start with a non-fallback stage, got ${RenderStage[targetStage]}`
+          )
+        }
+      }
+    }
+
     // If we're already at the target stage or beyond, do nothing.
     // (this can happen e.g. if sync IO advanced us to the dynamic stage)
     if (targetStage <= this.currentStage) {
@@ -331,6 +378,10 @@ export class StagedRenderingController {
         currentStage satisfies never
       }
     }
+  }
+
+  getFirstLateStage(): AdvanceableRenderStage {
+    return this.hasFallbacks ? FIRST_FALLBACK_LATE_STAGE : FIRST_LATE_STAGE
   }
 
   private resolveStage(stage: AdvanceableRenderStage) {

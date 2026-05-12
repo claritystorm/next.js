@@ -42,7 +42,7 @@ import {
   isNextjsBuiltinFilePath,
 } from './segment-explorer-path'
 import type { AppSegmentConfig } from '../../build/segment-config/app/app-segment-config'
-import { RenderStage, type StagedRenderingController } from './staged-rendering'
+import type { StagedRenderingController } from './staged-rendering'
 
 type HTTPAccessErrorStatusCode = 404 | 403 | 401
 
@@ -1356,7 +1356,7 @@ function createSeedData(
 ): CacheNodeSeedData {
   const createElement = ctx.componentMod.createElement
 
-  // When this segment is NOT runtime-prefetchable, delay it until the FallbackStatic
+  // When this segment is NOT runtime-prefetchable, delay it until the [Fallback]Static
   // stage by wrapping the node in a promise. This allows runtime-prefetchable
   // segments (the lower tree) to render first during [Fallback]EarlyStatic, so their
   // runtime data resolves in [Fallback]EarlyRuntime where sync IO can be checked.
@@ -1372,7 +1372,7 @@ function createSeedData(
           if (stagedRendering) {
             const deferredRsc = rsc
             rsc = stagedRendering
-              .waitForStage(RenderStage.FallbackStatic)
+              .waitForStage(stagedRendering.getFirstLateStage())
               .then(() => deferredRsc)
           }
           break
