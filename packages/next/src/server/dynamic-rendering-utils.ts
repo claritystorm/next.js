@@ -1,3 +1,4 @@
+import { InvariantError } from '../shared/lib/invariant-error'
 import {
   RenderStage,
   type AdvanceableRenderStage,
@@ -108,6 +109,17 @@ export function makeDevtoolsIOAwarePromise<T>(
   })
 }
 
+export const enum FallbackDataKind {
+  Include = 1,
+  Exclude = 2,
+}
+
+type SomeRuntimeStage =
+  | RenderStage.FallbackEarlyRuntime
+  | RenderStage.FallbackRuntime
+  | RenderStage.EarlyRuntime
+  | RenderStage.Runtime
+
 /**
  * Returns the appropriate runtime stage for the current point in the render.
  * Runtime-prefetchable segments render in the early stages and should wait
@@ -115,15 +127,42 @@ export function makeDevtoolsIOAwarePromise<T>(
  * and should wait for Runtime.
  */
 export function getRuntimeStage(
-  stagedRendering: StagedRenderingController
-): RenderStage.EarlyRuntime | RenderStage.Runtime {
-  if (
-    stagedRendering.currentStage === RenderStage.EarlyStatic ||
-    stagedRendering.currentStage === RenderStage.EarlyRuntime
-  ) {
-    return RenderStage.EarlyRuntime
+  stagedRendering: StagedRenderingController,
+  dataKind: FallbackDataKind
+): SomeRuntimeStage {
+  const { currentStage } = stagedRendering
+  switch (currentStage) {
+    case RenderStage.FallbackEarlyStatic:
+    case RenderStage.EarlyStatic:
+    case RenderStage.FallbackEarlyRuntime:
+    case RenderStage.EarlyRuntime: {
+      return dataKind === FallbackDataKind.Include
+        ? RenderStage.FallbackEarlyRuntime
+        : RenderStage.EarlyRuntime
+    }
+    case RenderStage.FallbackStatic:
+    case RenderStage.Static:
+    case RenderStage.FallbackRuntime:
+    case RenderStage.Runtime: {
+      return dataKind === FallbackDataKind.Include
+        ? RenderStage.FallbackRuntime
+        : RenderStage.Runtime
+    }
+    case RenderStage.Before:
+    case RenderStage.Dynamic:
+    case RenderStage.Abandoned: {
+      // Technically, we should consider erroring here,
+      // because we don't know the appropriate render stage,
+      // but it's unlikely to matter
+      return dataKind === FallbackDataKind.Include
+        ? RenderStage.FallbackRuntime
+        : RenderStage.Runtime
+    }
+    default: {
+      currentStage satisfies never
+      throw new InvariantError(`Invalid render stage: ${currentStage}`)
+    }
   }
-  return RenderStage.Runtime
 }
 
 /**
@@ -140,6 +179,7 @@ export function getRuntimeStage(
  */
 export function delayUntilRuntimeStage<T>(
   prerenderStore: PrerenderStoreModernRuntime,
+  kind: FallbackDataKind,
   result: Promise<T>
 ): Promise<T> {
   const { stagedRendering } = prerenderStore
@@ -147,7 +187,7 @@ export function delayUntilRuntimeStage<T>(
     return result
   }
   return stagedRendering
-    .waitForStage(getRuntimeStage(stagedRendering))
+    .waitForStage(getRuntimeStage(stagedRendering, kind))
     .then(() => result)
 }
 

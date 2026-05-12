@@ -68,7 +68,7 @@ export interface FetchServerResponseOptions {
   readonly isHmrRefresh?: boolean
 }
 
-export type StaticStageData<
+export type StageData<
   T extends
     | NavigationFlightResponse
     | InitialRSCPayload = NavigationFlightResponse,
@@ -85,7 +85,8 @@ type SpaFetchServerResponseResult = {
   supportsPerSegmentPrefetching: boolean
   postponed: boolean
   dynamicStaleTime: number
-  staticStageData: StaticStageData | null
+  staticStageData: StageData | null
+  fallbackStaticStageData: StageData | null
   runtimePrefetchStream: ReadableStream<Uint8Array> | null
   responseHeaders: Headers
   debugInfo: Array<any> | null
@@ -273,7 +274,7 @@ export async function fetchServerResponse(
       return doMpaNavigation(normalizedFlightData)
     }
 
-    const staticStageData =
+    const stageData =
       cacheData !== null
         ? await resolveStaticStageData(cacheData, flightResponse, headers)
         : null
@@ -297,7 +298,8 @@ export async function fetchServerResponse(
       // When absent (UnknownDynamicStaleTime), the client falls back to the
       // global DYNAMIC_STALETIME_MS. The value is in seconds.
       dynamicStaleTime: flightResponse.d ?? UnknownDynamicStaleTime,
-      staticStageData,
+      staticStageData: stageData?.static ?? null,
+      fallbackStaticStageData: stageData?.fallbackStatic ?? null,
       runtimePrefetchStream: flightResponse.p ?? null,
       responseHeaders: res.headers,
       debugInfo: flightResponsePromise._debugInfo ?? null,
@@ -432,27 +434,98 @@ export async function resolveStaticStageData<
   cacheData: FetchResponseCacheData,
   flightResponse: T,
   headers: RequestHeaders | undefined
-): Promise<StaticStageData<T> | null> {
-  const { isResponsePartial, responseBodyClone } = cacheData
+): Promise<{
+  fallbackStatic: StageData<T> | null
+  static: StageData<T> | null
+} | null> {
+  let { isResponsePartial, responseBodyClone } = cacheData
 
   if (responseBodyClone) {
     if (!isResponsePartial) {
-      // Fully static — cache the entire decoded response as-is.
-      responseBodyClone.cancel()
+      // The response isn't partial, so it's fully static.
+      const staticResponse = flightResponse
 
-      return { response: flightResponse, isResponsePartial: false }
-    }
+      if (flightResponse.lf === undefined) {
+        // We don't have any info about the fallback stage, so we only have a static response.
+        responseBodyClone.cancel()
+        return {
+          fallbackStatic: null,
+          static: { response: staticResponse, isResponsePartial: false },
+        }
+      }
 
-    if (flightResponse.l !== undefined) {
-      // Partially static — truncate the body clone at the byte boundary and
-      // decode it.
-      const response = await decodeStaticStage<T>(
+      // We've got a fully static response and in addition we can recover a fallback stage.
+      const fallbackStageByteLength = await flightResponse.lf
+      const fallbackResponse = await decodeStageUntilBoundary<T>(
         responseBodyClone,
-        flightResponse.l,
+        fallbackStageByteLength,
         headers
       )
 
-      return { response, isResponsePartial: true }
+      // If the fallback response is shorter than the static response, then it has to be partial.
+      // TODO(fallback-stage): use the length of the static response in case `.l` is undefined
+      const staticStageByteLength = await flightResponse.l
+      const isFallbackResponsePartial =
+        staticStageByteLength !== undefined
+          ? fallbackStageByteLength < staticStageByteLength
+          : true
+
+      return {
+        fallbackStatic: {
+          response: fallbackResponse,
+          isResponsePartial: isFallbackResponsePartial,
+        },
+        static: { response: staticResponse, isResponsePartial: false },
+      }
+    }
+
+    // Partially static.
+    if (flightResponse.l || flightResponse.lf) {
+      // The response is partially static and we have stage bytelengths.
+      // Recover the static and fallback stages.
+
+      let staticStageData: StageData<T> | null = null
+      if (flightResponse.l !== undefined) {
+        let staticResponseBody: typeof responseBodyClone
+        if (flightResponse.lf) {
+          // If we also have a fallback stage to recover after this, we can't consume the body,
+          // so clone the body stream again.
+          // TODO(fallback-stage): clean this up! this is hard to follow and also inefficient -- we don't need all these tees.
+          ;[responseBodyClone, staticResponseBody] = responseBodyClone.tee()
+        } else {
+          // If there's no fallback stage, we can consume the response here.
+          staticResponseBody = responseBodyClone
+        }
+
+        const staticStageByteLength = await flightResponse.l
+
+        const staticResponse = await decodeStageUntilBoundary<T>(
+          staticResponseBody,
+          staticStageByteLength,
+          headers
+        )
+        staticStageData = { response: staticResponse, isResponsePartial: true }
+      }
+
+      let fallbackStageData: StageData<T> | null = null
+      if (flightResponse.lf !== undefined) {
+        const fallbackStageByteLength = await flightResponse.lf
+
+        const fallbackResponse = await decodeStageUntilBoundary<T>(
+          responseBodyClone,
+          fallbackStageByteLength,
+          headers
+        )
+        fallbackStageData = {
+          response: fallbackResponse,
+          isResponsePartial: true,
+        }
+      }
+
+      return {
+        fallbackStatic: fallbackStageData,
+        static: staticStageData,
+      }
     }
 
     // No caching — cancel the unused clone.
@@ -463,23 +536,21 @@ export async function resolveStaticStageData<
 }
 
 /**
- * Truncates and buffers a Flight stream clone at the given byte boundary and
+ * Truncates and buffers a Flight stream at the given byte boundary and
  * decodes the static stage prefix. Used by both the navigation path and the
  * initial HTML hydration path.
  */
-export async function decodeStaticStage<T>(
-  responseBodyClone: ReadableStream<Uint8Array>,
-  staticStageByteLengthPromise: Promise<number>,
+export async function decodeStageUntilBoundary<T>(
+  responseBody: ReadableStream<Uint8Array>,
+  byteLength: number,
   headers: RequestHeaders | undefined
 ): Promise<T> {
-  const staticStageByteLength = await staticStageByteLengthPromise
-
   // Buffer the truncated stream into a single chunk before passing it to
   // Flight. This ensures all model data is available synchronously, which is
   // required for readVaryParams to synchronously read the thenable status.
   const { stream } = await createNonTaskyPrefetchResponseStream(
-    responseBodyClone,
-    staticStageByteLength
+    responseBody,
+    byteLength
   )
 
   return createFromNextReadableStream<T>(stream, headers, {

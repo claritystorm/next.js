@@ -39,6 +39,7 @@ import {
 
 import {
   applyOwnerStack,
+  FallbackDataKind,
   getRuntimeStage,
   makeDevtoolsIOAwarePromise,
   makeHangingPromise,
@@ -1687,7 +1688,11 @@ export async function cache(
         // while runtime-prefetchable segments resolve at Runtime.
         const stagedRendering = outerWorkUnitStore.stagedRendering
         if (stagedRendering) {
-          await stagedRendering.waitForStage(getRuntimeStage(stagedRendering))
+          // TODO(fallback-stage): exclude private caches with a short staletime from fallbacks
+          const fallbackKind = FallbackDataKind.Include
+          await stagedRendering.waitForStage(
+            getRuntimeStage(stagedRendering, fallbackKind)
+          )
         }
         break
       }
@@ -1696,9 +1701,13 @@ export async function cache(
           // Similar to runtime prerenders, private caches should not resolve in the static stage
           // of a dev request, so we delay them. We pick the appropriate runtime stage based on
           // whether we're in the early or late stages.
+
+          // TODO(fallback-stage): exclude private caches with a short staletime
+          const fallbackKind = FallbackDataKind.Include
+
           const stagedRendering = outerWorkUnitStore.stagedRendering
           const stage = stagedRendering
-            ? getRuntimeStage(stagedRendering)
+            ? getRuntimeStage(stagedRendering, fallbackKind)
             : RenderStage.Runtime
           await makeDevtoolsIOAwarePromise(undefined, outerWorkUnitStore, stage)
         }
@@ -2097,8 +2106,10 @@ export async function cache(
               // are resolved with a delay, in the appropriate runtime stage.
               const stagedRendering = workUnitStore.stagedRendering
               if (stagedRendering) {
+                // TODO(fallback-stage): exclude caches with a short staletime
+                const fallbackKind = FallbackDataKind.Include
                 await stagedRendering.waitForStage(
-                  getRuntimeStage(stagedRendering)
+                  getRuntimeStage(stagedRendering, fallbackKind)
                 )
               }
               break
@@ -2131,9 +2142,13 @@ export async function cache(
                 // TODO(restart-on-cache-miss): Optimize this to avoid unnecessary restarts.
                 // We don't end the cache read here, so this will always appear as a cache miss in the static stage,
                 // and thus will cause a restart even if all caches are filled.
+
+                // TODO(fallback-stage): exclude caches with a short staletime
+                const fallbackKind = FallbackDataKind.Include
+
                 const stagedRendering = workUnitStore.stagedRendering
                 const stage = stagedRendering
-                  ? getRuntimeStage(stagedRendering)
+                  ? getRuntimeStage(stagedRendering, fallbackKind)
                   : RenderStage.Runtime
                 await makeDevtoolsIOAwarePromise(
                   undefined,
@@ -2649,9 +2664,13 @@ export async function cache(
                 // unnecessary restarts. We don't end the cache read here, so
                 // this will always appear as a cache miss in the static stage,
                 // and thus will cause a restart even if all caches are filled.
+
+                // TODO(fallback-stage): exclude caches with a short staletime
+                const fallbackKind = FallbackDataKind.Include
+
                 const stagedRendering = workUnitStore.stagedRendering
                 const stage = stagedRendering
-                  ? getRuntimeStage(stagedRendering)
+                  ? getRuntimeStage(stagedRendering, fallbackKind)
                   : RenderStage.Runtime
                 await makeDevtoolsIOAwarePromise(
                   undefined,

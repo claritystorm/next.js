@@ -69,14 +69,14 @@ export function createMetadataComponents({
 
   async function Viewport() {
     // Gate metadata to the correct render stage. If the page is not
-    // runtime-prefetchable, defer until the Static stage so that
+    // runtime-prefetchable, defer until the FallbackStatic stage so that
     // prefetchable segments get a head start.
     if (!isRuntimePrefetchable) {
       const workUnitStore = workUnitAsyncStorage.getStore()
       if (workUnitStore) {
         const stagedRendering = getStagedRenderingController(workUnitStore)
         if (stagedRendering) {
-          await stagedRendering.waitForStage(RenderStage.Static)
+          await stagedRendering.waitForStage(RenderStage.FallbackStatic)
         }
       }
     }
@@ -120,14 +120,14 @@ export function createMetadataComponents({
 
   async function Metadata() {
     // Gate metadata to the correct render stage. If the page is not
-    // runtime-prefetchable, defer until the Static stage so that
+    // runtime-prefetchable, defer until the FallbackStatic stage so that
     // prefetchable segments get a head start.
     if (!isRuntimePrefetchable) {
       const workUnitStore = workUnitAsyncStorage.getStore()
       if (workUnitStore) {
         const stagedRendering = getStagedRenderingController(workUnitStore)
         if (stagedRendering) {
-          await stagedRendering.waitForStage(RenderStage.Static)
+          await stagedRendering.waitForStage(RenderStage.FallbackStatic)
         }
       }
     }

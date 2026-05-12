@@ -2256,6 +2256,15 @@ export async function fetchSegmentPrefetchesUsingDynamicRequest(
       navigationSeed,
       spawnedEntries
     )
+    // TODO(fallback-stage): use fallback stage for runtime prefetches
+    if (serverData.lf) {
+      serverData.lf.then((fallbackStageByteLength) => {
+        console.log(
+          'fallback stage data (runtime) length:',
+          fallbackStageByteLength
+        )
+      })
+    }
 
     // For buffered responses, update LRU sizes now that we know which
     // entries were fulfilled.
@@ -3018,6 +3027,10 @@ export async function processRuntimePrefetchStream(
     renderedSearch,
     UnknownDynamicStaleTime
   )
+  // TODO(fallback-stage): use recovered fallback data if available
+  if (serverData.lf) {
+    console.log('fallback stage data (runtime) length:', await serverData.lf)
+  }
 
   return {
     flightDatas,

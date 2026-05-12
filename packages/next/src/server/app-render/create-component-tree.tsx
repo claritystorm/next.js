@@ -1356,10 +1356,10 @@ function createSeedData(
 ): CacheNodeSeedData {
   const createElement = ctx.componentMod.createElement
 
-  // When this segment is NOT runtime-prefetchable, delay it until the Static
+  // When this segment is NOT runtime-prefetchable, delay it until the FallbackStatic
   // stage by wrapping the node in a promise. This allows runtime-prefetchable
-  // segments (the lower tree) to render first during EarlyStatic, so their
-  // runtime data resolves in EarlyRuntime where sync IO can be checked.
+  // segments (the lower tree) to render first during [Fallback]EarlyStatic, so their
+  // runtime data resolves in [Fallback]EarlyRuntime where sync IO can be checked.
   // React will suspend on the thenable and resume when the stage advances.
   if (!isRuntimePrefetchable) {
     const workUnitStore = workUnitAsyncStorage.getStore()
@@ -1372,7 +1372,7 @@ function createSeedData(
           if (stagedRendering) {
             const deferredRsc = rsc
             rsc = stagedRendering
-              .waitForStage(RenderStage.Static)
+              .waitForStage(RenderStage.FallbackStatic)
               .then(() => deferredRsc)
           }
           break

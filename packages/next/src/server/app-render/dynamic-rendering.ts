@@ -38,7 +38,11 @@ import {
   workUnitAsyncStorage,
 } from './work-unit-async-storage.external'
 import { workAsyncStorage } from '../app-render/work-async-storage.external'
-import { makeHangingPromise, getRuntimeStage } from '../dynamic-rendering-utils'
+import {
+  makeHangingPromise,
+  getRuntimeStage,
+  FallbackDataKind,
+} from '../dynamic-rendering-utils'
 import {
   METADATA_BOUNDARY_NAME,
   VIEWPORT_BOUNDARY_NAME,
@@ -570,8 +574,10 @@ export function createHangingInputAbortSignal(
           workUnitStore.stagedRendering
         ) {
           const { stagedRendering } = workUnitStore
+          // TODO(fallback-stage): this seems sketchy and might wait too long for fallback bits?
+          const fallbackKind = FallbackDataKind.Include
           stagedRendering
-            .waitForStage(getRuntimeStage(stagedRendering))
+            .waitForStage(getRuntimeStage(stagedRendering, fallbackKind))
             .then(() => scheduleOnNextTick(() => controller.abort()))
         } else {
           scheduleOnNextTick(() => controller.abort())

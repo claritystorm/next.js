@@ -350,6 +350,8 @@ export type InitialRSCPayload = {
   s?: AsyncIterable<number>
   /** staticStageByteLength - Resolves when the static stage ends. */
   l?: Promise<number>
+  /** fallbackStageByteLength - Resolves when the static stage ends. */
+  lf?: Promise<number>
   /** runtimePrefetchStream — Embedded runtime prefetch Flight stream. */
   p?: ReadableStream<Uint8Array>
   /**
@@ -378,6 +380,8 @@ export type NavigationFlightResponse = {
   s?: AsyncIterable<number>
   /** staticStageByteLength - Resolves when the static stage ends. */
   l?: Promise<number>
+  /** fallbackStageByteLength - Resolves when the static stage ends. */
+  lf?: Promise<number>
   /** headVaryParams */
   h: VaryParamsThenable | null
   /** runtimePrefetchStream — Embedded runtime prefetch Flight stream. */

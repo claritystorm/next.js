@@ -266,10 +266,9 @@ export function createServerParamsForServerSegment(
             workUnitStore,
             isRuntimePrefetchable
           )
-        } else if (
-          workUnitStore.asyncApiPromises &&
-          workUnitStore.validationSamples
-        ) {
+        }
+
+        if (workUnitStore.asyncApiPromises && workUnitStore.validationSamples) {
           return createServerParamsInInstantValidation(
             underlyingParams,
             workStore,
@@ -277,18 +276,23 @@ export function createServerParamsForServerSegment(
             workUnitStore.asyncApiPromises,
             isRuntimePrefetchable
           )
-        } else if (
+        }
+
+        if (
           workUnitStore.asyncApiPromises &&
-          hasFallbackRouteParams(underlyingParams, workUnitStore.fallbackParams)
+          // TODO(fallback-stage): fix missing fallbackParams in prod
+          // hasFallbackRouteParams(underlyingParams, workUnitStore.fallbackParams)
+          !isEmptyParams(underlyingParams) &&
+          !allParamsAreRootParams(underlyingParams, workUnitStore.rootParams)
         ) {
           return (
             isRuntimePrefetchable
               ? workUnitStore.asyncApiPromises.earlySharedParamsParent
               : workUnitStore.asyncApiPromises.sharedParamsParent
           ).then(() => underlyingParams)
-        } else {
-          return createRenderParamsInProd(underlyingParams)
         }
+
+        return createRenderParamsInProd(underlyingParams)
       default:
         workUnitStore satisfies never
     }
@@ -377,6 +381,7 @@ function createStaticPrerenderParams(
   switch (prerenderStore.type) {
     case 'prerender':
     case 'prerender-client': {
+      // TODO(fallback-stage): implement fallback stage generation for static prerenders
       const fallbackParams = prerenderStore.fallbackRouteParams
       if (fallbackParams) {
         for (const key in underlyingParams) {
@@ -439,12 +444,47 @@ function createRuntimePrerenderParams(
   const result = makeUntrackedParams(underlyingParamsWithVarying)
   const { stagedRendering } = workUnitStore
   if (!stagedRendering) {
+    // If there's no staging, we're in a prospective runtime prerender,
+    // and it doesn't matter when params resolve.
     return result
   }
+
+  // Semantically, we should resolve static params in the static stage,
+  // but we need to recover a param-less fallback stage, so we resolve all params
+  // in the runtime stage instead.
+  // We only let params resolve statically if they're all root params,
+  // because from the client's perspective those are constant (changing them is a MPA nav)
+  if (
+    isEmptyParams(underlyingParams) ||
+    allParamsAreRootParams(underlyingParams, workUnitStore.rootParams)
+  ) {
+    return result
+  }
+  // TODO(fallback-stage): we're inconsistent in using `asyncApiPromises`,
+  // we should probably just do that everywhere
   const stage = isRuntimePrefetchable
     ? RenderStage.EarlyRuntime
     : RenderStage.Runtime
   return stagedRendering.waitForStage(stage).then(() => result)
+}
+
+function allParamsAreRootParams(
+  segmentParams: Params,
+  rootParams: Params
+): boolean {
+  for (const paramKey in segmentParams) {
+    if (!(paramKey in rootParams)) {
+      return false
+    }
+  }
+  return true
+}
+
+function isEmptyParams(params: Params): boolean {
+  for (const _paramKey in params) {
+    return false
+  }
+  return true
 }
 
 function hasFallbackRouteParams(

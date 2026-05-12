@@ -1760,6 +1760,14 @@ async function fetchMissingDynamicData(
         })
     }
 
+    // TODO(fallback-stage): use static fallback data
+    if (routeCacheEntry !== null && result.fallbackStaticStageData !== null) {
+      console.log(
+        'fallback stage data (static):',
+        result.fallbackStaticStageData
+      )
+    }
+
     if (routeCacheEntry !== null && result.runtimePrefetchStream !== null) {
       processRuntimePrefetchStream(
         now,
