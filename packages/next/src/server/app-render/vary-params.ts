@@ -369,7 +369,6 @@ export async function finishAccumulatingVaryParams(
   await Promise.resolve()
   await Promise.resolve()
   await Promise.resolve()
-  console.log('finished - vary params')
 }
 
 function finishSegmentAccumulator(

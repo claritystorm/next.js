@@ -136,7 +136,8 @@ export function getRuntimeStage(
     case RenderStage.EarlyStatic:
     case RenderStage.FallbackEarlyRuntime:
     case RenderStage.EarlyRuntime: {
-      return dataKind === FallbackDataKind.Include
+      return dataKind === FallbackDataKind.Include &&
+        stagedRendering.hasFallbacks
         ? RenderStage.FallbackEarlyRuntime
         : RenderStage.EarlyRuntime
     }
@@ -144,7 +145,8 @@ export function getRuntimeStage(
     case RenderStage.Static:
     case RenderStage.FallbackRuntime:
     case RenderStage.Runtime: {
-      return dataKind === FallbackDataKind.Include
+      return dataKind === FallbackDataKind.Include &&
+        stagedRendering.hasFallbacks
         ? RenderStage.FallbackRuntime
         : RenderStage.Runtime
     }
@@ -154,7 +156,8 @@ export function getRuntimeStage(
       // Technically, we should consider erroring here,
       // because we don't know the appropriate render stage,
       // but it's unlikely to matter
-      return dataKind === FallbackDataKind.Include
+      return dataKind === FallbackDataKind.Include &&
+        stagedRendering.hasFallbacks
         ? RenderStage.FallbackRuntime
         : RenderStage.Runtime
     }
