@@ -574,8 +574,10 @@ export function createHangingInputAbortSignal(
           workUnitStore.stagedRendering
         ) {
           const { stagedRendering } = workUnitStore
-          // TODO(fallback-stage): this seems sketchy and might wait too long for fallback bits?
-          const fallbackKind = FallbackDataKind.Include
+          // Pessimistically act as if this is going to be excluded, i.e. wait until
+          // the (non-fallback) runtime stage.
+          // TODO(fallback-stage): not sure about this
+          const fallbackKind = FallbackDataKind.Exclude
           stagedRendering
             .waitForStage(getRuntimeStage(stagedRendering, fallbackKind))
             .then(() => scheduleOnNextTick(() => controller.abort()))
