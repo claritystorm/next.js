@@ -5591,7 +5591,7 @@ async function countStaticStageBytesWeb(
     if (done) {
       break
     }
-    console.log(new TextDecoder().decode(value)) // DEBUG
+    // console.log(new TextDecoder().decode(value)) // DEBUG
     if (stageController.currentStage >= endStage) {
       reader.cancel()
       break
@@ -5604,7 +5604,7 @@ async function countStaticStageBytesWeb(
     }
   }
 
-  console.log('countStaticStageBytes', byteLengths) // DEBUG
+  // console.log('countStaticStageBytes', byteLengths) // DEBUG
   return byteLengths
 }
 
