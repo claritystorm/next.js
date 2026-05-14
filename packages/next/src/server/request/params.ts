@@ -280,8 +280,10 @@ export function createServerParamsForServerSegment(
 
         if (
           workUnitStore.asyncApiPromises &&
-          // TODO(fallback-stage): fix missing fallbackParams in prod
-          // hasFallbackRouteParams(underlyingParams, workUnitStore.fallbackParams)
+          hasFallbackRouteParams(
+            underlyingParams,
+            workUnitStore.fallbackParams
+          ) &&
           !isEmptyParams(underlyingParams) &&
           !allParamsAreRootParams(underlyingParams, workUnitStore.rootParams)
         ) {
