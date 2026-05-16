@@ -103,12 +103,14 @@ impl Deref for ExternalEndpoint {
 /// `OperationVc<OptionEndpoint>` and extracting ignore rules from its config.
 async fn issue_filter_from_endpoint(
     endpoint_op: OperationVc<OptionEndpoint>,
-) -> Result<Vc<IssueFilter>> {
+) -> Result<ReadRef<IssueFilter>> {
     let endpoint_option = endpoint_op.connect().await?;
     if let Some(ep) = &*endpoint_option {
-        Ok(ep.project().issue_filter())
+        ep.project().issue_filter().await
     } else {
-        Ok(IssueFilter::warnings_and_foreign_errors().cell())
+        Ok(ReadRef::new_owned(
+            IssueFilter::warnings_and_foreign_errors(),
+        ))
     }
 }
 
@@ -126,7 +128,7 @@ async fn get_written_endpoint_with_issues_operation(
     let write_to_disk_op = endpoint_write_to_disk_operation(endpoint_op);
     let filter = issue_filter_from_endpoint(endpoint_op).await?;
     let (written, issues, effects) =
-        strongly_consistent_catch_collectables(write_to_disk_op, filter).await?;
+        strongly_consistent_catch_collectables(write_to_disk_op, &*filter).await?;
     Ok(WrittenEndpointWithIssues {
         written,
         issues,
@@ -232,7 +234,7 @@ async fn subscribe_issues_and_diags_operation(
     if should_include_issues {
         let filter = issue_filter_from_endpoint(endpoint_op).await?;
         let (changed_value, issues, effects) =
-            strongly_consistent_catch_collectables(changed_op, filter).await?;
+            strongly_consistent_catch_collectables(changed_op, &*filter).await?;
         Ok(EndpointIssuesAndDiags {
             changed: changed_value,
             issues,
