@@ -1,0 +1,25 @@
+[package]
+name = "turbo-tasks-handle"
+version = "0.1.0"
+description = "Concrete dispatch providers for the turbo-tasks task-local. Implements `extern \"Rust\"` symbols whose forward declarations live in `turbo-tasks`, allowing thin-LTO devirtualization of the prod and test handles."
+license = "MIT"
+edition = "2024"
+
+[lib]
+bench = false
+
+[lints]
+workspace = true
+
+[features]
+# Auto-activated by binaries / test crates that need the corresponding arm.
+# - `prod`: links `turbo-tasks-backend` and emits `__tt_prod_*` providers.
+# - `test`: links `turbo-tasks-testing` and emits `__tt_test_*` providers.
+prod = ["dep:turbo-tasks-backend"]
+test = ["dep:turbo-tasks-testing"]
+
+[dependencies]
+turbo-tasks = { workspace = true }
+
+turbo-tasks-backend = { workspace = true, optional = true }
+turbo-tasks-testing = { workspace = true, optional = true }

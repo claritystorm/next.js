@@ -10017,6 +10017,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "turbo-tasks-handle"
+version = "0.1.0"
+dependencies = [
+ "turbo-tasks",
+ "turbo-tasks-backend",
+ "turbo-tasks-testing",
+]
+
+[[package]]
 name = "turbo-tasks-hash"
 version = "0.1.0"
 dependencies = [
