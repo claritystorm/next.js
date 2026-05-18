@@ -10,6 +10,7 @@
 #![feature(async_fn_traits)]
 #![feature(impl_trait_in_assoc_type)]
 #![feature(const_type_name)]
+#![feature(macro_metavar_expr_concat)]
 
 pub mod backend;
 mod capture_future;
@@ -24,6 +25,7 @@ mod effect;
 mod error;
 pub mod event;
 pub mod graph;
+mod handle;
 mod id;
 mod id_factory;
 mod invalidation;
@@ -81,6 +83,7 @@ pub use crate::{
     },
     effect::{Effect, EffectError, EffectStateStorage, Effects, emit_effect, take_effects},
     error::PrettyPrintError,
+    handle::{HandleTag, TurboTasksHandle},
     id::{ExecutionId, LocalTaskId, TRANSIENT_TASK_BIT, TaskId, TraitTypeId, ValueTypeId},
     invalidation::{
         InvalidationReason, InvalidationReasonKind, InvalidationReasonSet, Invalidator,

@@ -10020,6 +10020,7 @@ dependencies = [
 name = "turbo-tasks-handle"
 version = "0.1.0"
 dependencies = [
+ "either",
  "turbo-tasks",
  "turbo-tasks-backend",
  "turbo-tasks-testing",
