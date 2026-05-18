@@ -94,6 +94,10 @@ swc_plugin_backend_wasmtime = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 turbo-rcstr = { workspace = true, features = ["napi"] }
 turbo-tasks = { workspace = true }
+# Pulls in the `__tt_prod_*` extern "Rust" providers that satisfy the
+# forward declarations in `turbo-tasks::handle`. Without this dep the
+# cdylib fails to link.
+turbo-tasks-handle = { workspace = true, features = ["prod"] }
 turbo-tasks-backend = { workspace = true }
 turbo-tasks-fs = { workspace = true }
 turbo-unix-path = { workspace = true }

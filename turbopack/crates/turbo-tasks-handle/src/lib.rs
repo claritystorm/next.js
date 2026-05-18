@@ -43,10 +43,10 @@ mod prod {
     use super::*;
 
     /// Generates `#[no_mangle] pub extern "Rust" fn __tt_prod_<name>(...)`
-    /// for a single dispatched method. The body casts `ptr` back to
-    /// `&ProdHandleConcrete` and forwards through method call syntax so
-    /// both `TurboTasksApi` and `TurboTasksCallApi` methods resolve
-    /// correctly (the former is a super-trait of the latter).
+    /// for a single dispatched method, dispatched via method call syntax.
+    /// This resolves to whichever trait method or inherent method has the
+    /// matching name; for methods that don't have a colliding inherent
+    /// method on the concrete type, this is fine.
     macro_rules! provide_prod {
         (
             fn $name:ident( $($arg:ident : $ty:ty),* $(,)? ) $(-> $ret:ty)?
@@ -58,6 +58,28 @@ mod prod {
             ) $(-> $ret)? {
                 let tt: &ProdHandleConcrete = unsafe { &*(ptr as *const ProdHandleConcrete) };
                 tt.$name($($arg),*)
+            }
+        };
+    }
+
+    /// Same as `provide_prod!`, but forces UFCS dispatch to a specific
+    /// trait. Used for methods (`run`, `run_once`, `run_once_with_reason`,
+    /// `start_once_process`, `stop_and_wait`) where the concrete type has
+    /// an inherent method with the same name but a different return type
+    /// — without UFCS, the inherent method wins and the macro fails type
+    /// checking.
+    macro_rules! provide_prod_trait {
+        (
+            $trait:path,
+            fn $name:ident( $($arg:ident : $ty:ty),* $(,)? ) $(-> $ret:ty)?
+        ) => {
+            #[unsafe(no_mangle)]
+            pub extern "Rust" fn ${concat(__tt_prod_, $name)}(
+                ptr: *const ()
+                $(, $arg : $ty)*
+            ) $(-> $ret)? {
+                let tt: &ProdHandleConcrete = unsafe { &*(ptr as *const ProdHandleConcrete) };
+                <ProdHandleConcrete as $trait>::$name(tt $(, $arg)*)
             }
         };
     }
@@ -93,6 +115,21 @@ mod prod {
         event: ::std::sync::Arc<dyn turbo_tasks::message_queue::CompilationEvent>,
     ));
     provide_prod!(fn get_task_name(task: turbo_tasks::TaskId) -> ::std::string::String);
+
+    provide_prod_trait!(turbo_tasks::TurboTasksCallApi, fn run(
+        future: ::std::pin::Pin<::std::boxed::Box<dyn ::std::future::Future<Output = ::anyhow::Result<()>> + ::core::marker::Send + 'static>>,
+    ) -> ::std::pin::Pin<::std::boxed::Box<dyn ::std::future::Future<Output = ::core::result::Result<(), turbo_tasks::backend::TurboTasksExecutionError>> + ::core::marker::Send>>);
+    provide_prod_trait!(turbo_tasks::TurboTasksCallApi, fn run_once(
+        future: ::std::pin::Pin<::std::boxed::Box<dyn ::std::future::Future<Output = ::anyhow::Result<()>> + ::core::marker::Send + 'static>>,
+    ) -> ::std::pin::Pin<::std::boxed::Box<dyn ::std::future::Future<Output = ::anyhow::Result<()>> + ::core::marker::Send>>);
+    provide_prod_trait!(turbo_tasks::TurboTasksCallApi, fn run_once_with_reason(
+        reason: turbo_tasks::util::StaticOrArc<dyn turbo_tasks::InvalidationReason>,
+        future: ::std::pin::Pin<::std::boxed::Box<dyn ::std::future::Future<Output = ::anyhow::Result<()>> + ::core::marker::Send + 'static>>,
+    ) -> ::std::pin::Pin<::std::boxed::Box<dyn ::std::future::Future<Output = ::anyhow::Result<()>> + ::core::marker::Send>>);
+    provide_prod_trait!(turbo_tasks::TurboTasksCallApi, fn start_once_process(
+        future: ::std::pin::Pin<::std::boxed::Box<dyn ::std::future::Future<Output = ()> + ::core::marker::Send + 'static>>,
+    ));
+    provide_prod_trait!(turbo_tasks::TurboTasksApi, fn stop_and_wait() -> ::std::pin::Pin<::std::boxed::Box<dyn ::std::future::Future<Output = ()> + ::core::marker::Send>>);
 
     // TurboTasksApi
     provide_prod!(fn invalidate(task: turbo_tasks::TaskId));
@@ -156,6 +193,20 @@ mod prod {
         event_types: ::core::option::Option<::std::vec::Vec<::std::string::String>>,
     ) -> ::tokio::sync::mpsc::Receiver<::std::sync::Arc<dyn turbo_tasks::message_queue::CompilationEvent>>);
     provide_prod!(fn is_tracking_dependencies() -> bool);
+
+    // `task_statistics` is special: the trait method returns
+    // `&TaskStatisticsApi` borrowed from `&self`, but extern "Rust" can't
+    // carry that lifetime through a `*const ()` receiver. The provider
+    // returns a raw pointer; the handle wrapper in `turbo-tasks` re-binds
+    // the lifetime to `&self`. This is sound because the underlying Arc
+    // (held by the handle) keeps the `TaskStatisticsApi` alive.
+    #[unsafe(no_mangle)]
+    pub extern "Rust" fn __tt_prod_task_statistics(
+        ptr: *const (),
+    ) -> *const turbo_tasks::task_statistics::TaskStatisticsApi {
+        let tt: &ProdHandleConcrete = unsafe { &*(ptr as *const ProdHandleConcrete) };
+        tt.task_statistics() as *const _
+    }
 
     // ---- Arc clone / drop -------------------------------------------------
 
@@ -262,6 +313,23 @@ mod test_arm {
         };
     }
 
+    /// Mirrors `provide_prod_trait!` — see its docs.
+    macro_rules! provide_test_trait {
+        (
+            $trait:path,
+            fn $name:ident( $($arg:ident : $ty:ty),* $(,)? ) $(-> $ret:ty)?
+        ) => {
+            #[unsafe(no_mangle)]
+            pub extern "Rust" fn ${concat(__tt_test_, $name)}(
+                ptr: *const ()
+                $(, $arg : $ty)*
+            ) $(-> $ret)? {
+                let tt: &TestHandleConcrete = unsafe { &*(ptr as *const TestHandleConcrete) };
+                <TestHandleConcrete as $trait>::$name(tt $(, $arg)*)
+            }
+        };
+    }
+
     // ---- dispatched methods ----------------------------------------------
     // (Mirror of the `prod` block — keep in sync.)
 
@@ -288,6 +356,21 @@ mod test_arm {
         event: ::std::sync::Arc<dyn turbo_tasks::message_queue::CompilationEvent>,
     ));
     provide_test!(fn get_task_name(task: turbo_tasks::TaskId) -> ::std::string::String);
+
+    provide_test_trait!(turbo_tasks::TurboTasksCallApi, fn run(
+        future: ::std::pin::Pin<::std::boxed::Box<dyn ::std::future::Future<Output = ::anyhow::Result<()>> + ::core::marker::Send + 'static>>,
+    ) -> ::std::pin::Pin<::std::boxed::Box<dyn ::std::future::Future<Output = ::core::result::Result<(), turbo_tasks::backend::TurboTasksExecutionError>> + ::core::marker::Send>>);
+    provide_test_trait!(turbo_tasks::TurboTasksCallApi, fn run_once(
+        future: ::std::pin::Pin<::std::boxed::Box<dyn ::std::future::Future<Output = ::anyhow::Result<()>> + ::core::marker::Send + 'static>>,
+    ) -> ::std::pin::Pin<::std::boxed::Box<dyn ::std::future::Future<Output = ::anyhow::Result<()>> + ::core::marker::Send>>);
+    provide_test_trait!(turbo_tasks::TurboTasksCallApi, fn run_once_with_reason(
+        reason: turbo_tasks::util::StaticOrArc<dyn turbo_tasks::InvalidationReason>,
+        future: ::std::pin::Pin<::std::boxed::Box<dyn ::std::future::Future<Output = ::anyhow::Result<()>> + ::core::marker::Send + 'static>>,
+    ) -> ::std::pin::Pin<::std::boxed::Box<dyn ::std::future::Future<Output = ::anyhow::Result<()>> + ::core::marker::Send>>);
+    provide_test_trait!(turbo_tasks::TurboTasksCallApi, fn start_once_process(
+        future: ::std::pin::Pin<::std::boxed::Box<dyn ::std::future::Future<Output = ()> + ::core::marker::Send + 'static>>,
+    ));
+    provide_test_trait!(turbo_tasks::TurboTasksApi, fn stop_and_wait() -> ::std::pin::Pin<::std::boxed::Box<dyn ::std::future::Future<Output = ()> + ::core::marker::Send>>);
 
     // TurboTasksApi
     provide_test!(fn invalidate(task: turbo_tasks::TaskId));
@@ -351,6 +434,14 @@ mod test_arm {
         event_types: ::core::option::Option<::std::vec::Vec<::std::string::String>>,
     ) -> ::tokio::sync::mpsc::Receiver<::std::sync::Arc<dyn turbo_tasks::message_queue::CompilationEvent>>);
     provide_test!(fn is_tracking_dependencies() -> bool);
+
+    #[unsafe(no_mangle)]
+    pub extern "Rust" fn __tt_test_task_statistics(
+        ptr: *const (),
+    ) -> *const turbo_tasks::task_statistics::TaskStatisticsApi {
+        let tt: &TestHandleConcrete = unsafe { &*(ptr as *const TestHandleConcrete) };
+        tt.task_statistics() as *const _
+    }
 
     // ---- Arc clone / drop -------------------------------------------------
 

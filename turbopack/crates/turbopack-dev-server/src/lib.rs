@@ -30,8 +30,8 @@ use socket2::{Domain, Protocol, Socket, Type};
 use tokio::task::JoinHandle;
 use tracing::{Instrument, Level, Span, event, info_span};
 use turbo_tasks::{
-    Effects, NonLocalValue, OperationVc, PrettyPrintError, TurboTasksApi, Vc, run_once_with_reason,
-    take_effects, trace::TraceRawVcs, util::FormatDuration,
+    Effects, NonLocalValue, OperationVc, PrettyPrintError, Vc, run_once_with_reason, take_effects,
+    trace::TraceRawVcs, util::FormatDuration,
 };
 use turbopack_core::issue::{IssueReporter, IssueSeverity, handle_issues};
 
@@ -124,7 +124,7 @@ impl DevServer {
 impl DevServerBuilder {
     pub fn serve(
         self,
-        turbo_tasks: Arc<dyn TurboTasksApi>,
+        turbo_tasks: turbo_tasks::TurboTasksHandle,
         source_provider: impl SourceProvider + NonLocalValue + TraceRawVcs + Sync,
         get_issue_reporter: Arc<dyn Fn() -> Vc<Box<dyn IssueReporter>> + Send + Sync>,
     ) -> DevServer {
@@ -195,7 +195,7 @@ impl DevServerBuilder {
                                         hyper_tungstenite::upgrade(request, None)?;
                                     let update_server =
                                         UpdateServer::new(source_provider, issue_reporter);
-                                    update_server.run(&*tt, websocket);
+                                    update_server.run(&tt, websocket);
                                     return Ok(response);
                                 }
 

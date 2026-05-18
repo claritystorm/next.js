@@ -285,8 +285,7 @@ impl FetchClientConfig {
                 // FetchClientConfig to track outstanding timers and cancel them.
                 turbo_tasks::spawn(async move {
                     tokio::time::sleep(remaining).await;
-                    invalidator
-                        .invalidate_with_reason(&*turbo_tasks::turbo_tasks(), HttpTimeout {});
+                    invalidator.invalidate_with_reason(&turbo_tasks::turbo_tasks(), HttpTimeout {});
                 });
             }
         }

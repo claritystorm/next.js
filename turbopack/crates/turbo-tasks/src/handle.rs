@@ -220,6 +220,50 @@ tt_decl_handle_method!(fn send_compilation_event(
 tt_decl_extern!(fn get_task_name(task: crate::TaskId) -> ::std::string::String);
 tt_decl_handle_method!(fn get_task_name(task: crate::TaskId) -> ::std::string::String);
 
+// `run`, `run_once`, `run_once_with_reason`, `start_once_process`, and
+// `stop_and_wait` need to be on the dispatch surface because the test
+// harness in `turbo-tasks-testing` constructs a type-erased
+// `TestInstance.tt: TurboTasksHandle` and passes it to the free
+// `turbo_tasks::run_once` / `turbo_tasks::run` helpers. Without these on
+// the handle, we'd have to either expose the concrete backend type
+// through `TestInstance` (cascades into `Registration`) or duplicate the
+// helpers per arm. Putting them on the dispatch surface is one extern
+// symbol per method per arm — cheap.
+tt_decl_extern!(fn run(
+    future: ::std::pin::Pin<::std::boxed::Box<dyn ::std::future::Future<Output = ::anyhow::Result<()>> + ::core::marker::Send + 'static>>,
+) -> ::std::pin::Pin<::std::boxed::Box<dyn ::std::future::Future<Output = ::core::result::Result<(), crate::backend::TurboTasksExecutionError>> + ::core::marker::Send>>);
+tt_decl_handle_method!(fn run(
+    future: ::std::pin::Pin<::std::boxed::Box<dyn ::std::future::Future<Output = ::anyhow::Result<()>> + ::core::marker::Send + 'static>>,
+) -> ::std::pin::Pin<::std::boxed::Box<dyn ::std::future::Future<Output = ::core::result::Result<(), crate::backend::TurboTasksExecutionError>> + ::core::marker::Send>>);
+
+tt_decl_extern!(fn run_once(
+    future: ::std::pin::Pin<::std::boxed::Box<dyn ::std::future::Future<Output = ::anyhow::Result<()>> + ::core::marker::Send + 'static>>,
+) -> ::std::pin::Pin<::std::boxed::Box<dyn ::std::future::Future<Output = ::anyhow::Result<()>> + ::core::marker::Send>>);
+tt_decl_handle_method!(fn run_once(
+    future: ::std::pin::Pin<::std::boxed::Box<dyn ::std::future::Future<Output = ::anyhow::Result<()>> + ::core::marker::Send + 'static>>,
+) -> ::std::pin::Pin<::std::boxed::Box<dyn ::std::future::Future<Output = ::anyhow::Result<()>> + ::core::marker::Send>>);
+
+tt_decl_extern!(fn run_once_with_reason(
+    reason: crate::util::StaticOrArc<dyn crate::InvalidationReason>,
+    future: ::std::pin::Pin<::std::boxed::Box<dyn ::std::future::Future<Output = ::anyhow::Result<()>> + ::core::marker::Send + 'static>>,
+) -> ::std::pin::Pin<::std::boxed::Box<dyn ::std::future::Future<Output = ::anyhow::Result<()>> + ::core::marker::Send>>);
+tt_decl_handle_method!(fn run_once_with_reason(
+    reason: crate::util::StaticOrArc<dyn crate::InvalidationReason>,
+    future: ::std::pin::Pin<::std::boxed::Box<dyn ::std::future::Future<Output = ::anyhow::Result<()>> + ::core::marker::Send + 'static>>,
+) -> ::std::pin::Pin<::std::boxed::Box<dyn ::std::future::Future<Output = ::anyhow::Result<()>> + ::core::marker::Send>>);
+
+tt_decl_extern!(fn start_once_process(
+    future: ::std::pin::Pin<::std::boxed::Box<dyn ::std::future::Future<Output = ()> + ::core::marker::Send + 'static>>,
+));
+tt_decl_handle_method!(fn start_once_process(
+    future: ::std::pin::Pin<::std::boxed::Box<dyn ::std::future::Future<Output = ()> + ::core::marker::Send + 'static>>,
+));
+
+tt_decl_extern!(fn stop_and_wait()
+    -> ::std::pin::Pin<::std::boxed::Box<dyn ::std::future::Future<Output = ()> + ::core::marker::Send>>);
+tt_decl_handle_method!(fn stop_and_wait()
+    -> ::std::pin::Pin<::std::boxed::Box<dyn ::std::future::Future<Output = ()> + ::core::marker::Send>>);
+
 // `TurboTasksApi` methods (inherits TurboTasksCallApi above).
 tt_decl_extern!(fn invalidate(task: crate::TaskId));
 tt_decl_handle_method!(fn invalidate(task: crate::TaskId));
@@ -360,6 +404,34 @@ tt_decl_handle_method!(fn subscribe_to_compilation_events(
 
 tt_decl_extern!(fn is_tracking_dependencies() -> bool);
 tt_decl_handle_method!(fn is_tracking_dependencies() -> bool);
+
+// `task_statistics` returns `&TaskStatisticsApi` borrowed from `&self`.
+// The macro can't express the lifetime relationship through a `*const ()`
+// receiver, so the providers return `*const TaskStatisticsApi` and the
+// handle wrapper re-binds the lifetime to `&self`.
+unsafe extern "Rust" {
+    fn __tt_prod_task_statistics(
+        ptr: *const (),
+    ) -> *const crate::task_statistics::TaskStatisticsApi;
+    fn __tt_test_task_statistics(
+        ptr: *const (),
+    ) -> *const crate::task_statistics::TaskStatisticsApi;
+}
+
+impl TurboTasksHandle {
+    #[inline]
+    pub fn task_statistics(&self) -> &crate::task_statistics::TaskStatisticsApi {
+        // SAFETY: the provider returns a pointer to a `TaskStatisticsApi`
+        // owned by the underlying `TurboTasks<B>` / `VcStorage`, which the
+        // handle holds alive via its Arc. The returned reference is bound
+        // to `&self`.
+        let ptr = match self.tag {
+            HandleTag::Prod => unsafe { __tt_prod_task_statistics(self.ptr.as_ptr()) },
+            HandleTag::Test => unsafe { __tt_test_task_statistics(self.ptr.as_ptr()) },
+        };
+        unsafe { &*ptr }
+    }
+}
 
 // =====================================================================
 // Clone / Drop dispatch — Arc-style refcounting through extern symbols.

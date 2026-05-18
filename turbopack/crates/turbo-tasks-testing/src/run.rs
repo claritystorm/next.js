@@ -1,18 +1,18 @@
 use std::{env, fmt::Debug, future::Future, sync::Arc};
 
 use anyhow::Result;
-use turbo_tasks::{TurboTasks, TurboTasksApi, trace::TraceRawVcs};
+use turbo_tasks::{TurboTasks, TurboTasksHandle, trace::TraceRawVcs};
 use turbo_tasks_backend::{BackingStorage, TurboTasksBackend};
 
 /// A freshly created test instance: the `TurboTasks` handle (type-erased to
-/// `Arc<dyn TurboTasksApi>`) and a closure that, when called, takes a
+/// `TurboTasksHandle`) and a closure that, when called, takes a
 /// snapshot and evicts all evictable tasks on that instance.
 ///
 /// The eviction closure captures the concrete backend type internally so
-/// harness code holding an erased `TurboTasksApi` can still reach the
+/// harness code holding an erased handle can still reach the
 /// `snapshot_and_evict` API.
 pub struct TestInstance {
-    pub tt: Arc<dyn TurboTasksApi>,
+    pub tt: TurboTasksHandle,
     pub snapshot_and_evict: Box<dyn Fn() + Send + Sync>,
 }
 
@@ -49,7 +49,7 @@ where
             .snapshot_and_evict_for_testing(&*tt_for_evict);
     });
     TestInstance {
-        tt: tt as Arc<dyn TurboTasksApi>,
+        tt: tt.make_handle(),
         snapshot_and_evict,
     }
 }
@@ -125,7 +125,7 @@ where
 
 pub async fn run_with_tt<T, F>(
     registration: &Registration,
-    mut fut: impl FnMut(Arc<dyn TurboTasksApi>) -> F + Send + 'static,
+    mut fut: impl FnMut(TurboTasksHandle) -> F + Send + 'static,
 ) -> Result<()>
 where
     F: Future<Output = Result<T>> + Send + 'static,

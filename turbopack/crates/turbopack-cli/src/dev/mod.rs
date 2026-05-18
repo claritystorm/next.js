@@ -247,7 +247,7 @@ impl TurbopackDevServerBuilder {
         };
 
         let issue_reporter_arc = Arc::new(move || issue_provider.get_issue_reporter());
-        Ok(server.serve(tasks, source, issue_reporter_arc))
+        Ok(server.serve(tasks.make_handle(), source, issue_reporter_arc))
     }
 }
 

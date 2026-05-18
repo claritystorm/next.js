@@ -13,7 +13,7 @@ use tokio::select;
 use tokio_stream::StreamMap;
 use tracing::{Level, instrument};
 use turbo_tasks::{
-    NonLocalValue, OperationVc, PrettyPrintError, ReadRef, TransientInstance, TurboTasksApi, Vc,
+    NonLocalValue, OperationVc, PrettyPrintError, ReadRef, TransientInstance, Vc,
     trace::TraceRawVcs,
 };
 use turbo_tasks_fs::json::parse_json_with_source_context;
@@ -52,7 +52,7 @@ where
     }
 
     /// Run the update server loop.
-    pub fn run(self, tt: &dyn TurboTasksApi, ws: HyperWebsocket) {
+    pub fn run(self, tt: &turbo_tasks::TurboTasksHandle, ws: HyperWebsocket) {
         tt.start_once_process(Box::pin(async move {
             if let Err(err) = self.run_internal(ws).await {
                 println!("[UpdateServer]: error {err:#}");
