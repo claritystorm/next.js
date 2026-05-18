@@ -34,7 +34,6 @@ tempfile = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 tungstenite = { workspace = true }
 turbo-tasks = { workspace = true }
-turbo-tasks-testing = { workspace = true }
 turbopack-create-test-app = { workspace = true }
 url = { workspace = true }
 

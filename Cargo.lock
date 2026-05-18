@@ -10161,7 +10161,6 @@ dependencies = [
  "tokio",
  "tungstenite 0.20.1",
  "turbo-tasks",
- "turbo-tasks-testing",
  "turbopack-create-test-app",
  "url",
 ]
