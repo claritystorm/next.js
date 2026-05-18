@@ -362,7 +362,7 @@ tt_decl_extern!(fn is_tracking_dependencies() -> bool);
 tt_decl_handle_method!(fn is_tracking_dependencies() -> bool);
 
 // =====================================================================
-// Clone / Drop dispatch
+// Clone / Drop dispatch — Arc-style refcounting through extern symbols.
 // =====================================================================
 
 unsafe extern "Rust" {
@@ -370,6 +370,22 @@ unsafe extern "Rust" {
     fn __tt_prod_drop_arc(ptr: *const ());
     fn __tt_test_clone_arc(ptr: *const ());
     fn __tt_test_drop_arc(ptr: *const ());
+
+    // Weak-handle support. Each arm provides:
+    //   downgrade : *const Arc<T> -> *const Weak<T> (transfers no refcount,
+    //               creates a fresh Weak; caller owns the returned weak).
+    //   upgrade   : *const Weak<T> -> *const Arc<T> (returns null if the
+    //               Arc is gone; otherwise transfers one strong refcount).
+    //   clone_weak: bumps the weak refcount.
+    //   drop_weak : drops the weak refcount.
+    fn __tt_prod_downgrade(arc_ptr: *const ()) -> *const ();
+    fn __tt_prod_upgrade(weak_ptr: *const ()) -> *const ();
+    fn __tt_prod_clone_weak(weak_ptr: *const ());
+    fn __tt_prod_drop_weak(weak_ptr: *const ());
+    fn __tt_test_downgrade(arc_ptr: *const ()) -> *const ();
+    fn __tt_test_upgrade(weak_ptr: *const ()) -> *const ();
+    fn __tt_test_clone_weak(weak_ptr: *const ());
+    fn __tt_test_drop_weak(weak_ptr: *const ());
 }
 
 impl Clone for TurboTasksHandle {
@@ -392,6 +408,91 @@ impl Drop for TurboTasksHandle {
         match self.tag {
             HandleTag::Prod => unsafe { __tt_prod_drop_arc(self.ptr.as_ptr()) },
             HandleTag::Test => unsafe { __tt_test_drop_arc(self.ptr.as_ptr()) },
+        }
+    }
+}
+
+impl TurboTasksHandle {
+    /// Downgrades to a weak handle, equivalent to `Arc::downgrade`.
+    #[inline]
+    pub fn downgrade(&self) -> TurboTasksWeakHandle {
+        let weak_ptr = match self.tag {
+            HandleTag::Prod => unsafe { __tt_prod_downgrade(self.ptr.as_ptr()) },
+            HandleTag::Test => unsafe { __tt_test_downgrade(self.ptr.as_ptr()) },
+        };
+        TurboTasksWeakHandle {
+            tag: self.tag,
+            // `downgrade` always produces a valid pointer (a `Weak` is never
+            // null even when the strong count is zero); we can safely
+            // `NonNull::new_unchecked` it.
+            ptr: unsafe { NonNull::new_unchecked(weak_ptr as *mut ()) },
+        }
+    }
+}
+
+// =====================================================================
+// Weak-handle dispatch.
+//
+// Mirrors the strong-handle dispatch but holds the data pointer of a
+// `Weak<T>`. Used by long-lived non-task contexts (e.g. the filesystem
+// watcher in `turbo-tasks-fs`) that need to reach back into TurboTasks
+// without keeping it alive.
+// =====================================================================
+
+/// Weak counterpart to [`TurboTasksHandle`]. Constructed via
+/// [`TurboTasksHandle::downgrade`]; upgraded via
+/// [`TurboTasksWeakHandle::upgrade`].
+#[derive(Debug)]
+pub struct TurboTasksWeakHandle {
+    tag: HandleTag,
+    /// Points at the inner of a `Weak<ConcreteHandle>` owned via
+    /// `Weak::into_raw`. The strong count may be zero by the time we
+    /// try to upgrade.
+    ptr: NonNull<()>,
+}
+
+// Safety: as with `TurboTasksHandle`, the concrete weak pointer's data
+// is `Send + Sync` for any `T: Send + Sync`.
+unsafe impl Send for TurboTasksWeakHandle {}
+unsafe impl Sync for TurboTasksWeakHandle {}
+
+impl TurboTasksWeakHandle {
+    /// Tries to recover a strong handle. Returns `None` if the underlying
+    /// concrete handle has been dropped.
+    #[inline]
+    pub fn upgrade(&self) -> Option<TurboTasksHandle> {
+        let strong_ptr = match self.tag {
+            HandleTag::Prod => unsafe { __tt_prod_upgrade(self.ptr.as_ptr()) },
+            HandleTag::Test => unsafe { __tt_test_upgrade(self.ptr.as_ptr()) },
+        };
+        let strong_ptr = NonNull::new(strong_ptr as *mut ())?;
+        // Safety: the provider returned a non-null `Arc::into_raw` pointer
+        // for the concrete type indicated by `self.tag`. Ownership of one
+        // strong refcount transfers in.
+        Some(unsafe { TurboTasksHandle::from_raw_parts(self.tag, strong_ptr) })
+    }
+}
+
+impl Clone for TurboTasksWeakHandle {
+    #[inline]
+    fn clone(&self) -> Self {
+        match self.tag {
+            HandleTag::Prod => unsafe { __tt_prod_clone_weak(self.ptr.as_ptr()) },
+            HandleTag::Test => unsafe { __tt_test_clone_weak(self.ptr.as_ptr()) },
+        }
+        Self {
+            tag: self.tag,
+            ptr: self.ptr,
+        }
+    }
+}
+
+impl Drop for TurboTasksWeakHandle {
+    #[inline]
+    fn drop(&mut self) {
+        match self.tag {
+            HandleTag::Prod => unsafe { __tt_prod_drop_weak(self.ptr.as_ptr()) },
+            HandleTag::Test => unsafe { __tt_test_drop_weak(self.ptr.as_ptr()) },
         }
     }
 }

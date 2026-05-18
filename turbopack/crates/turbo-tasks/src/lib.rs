@@ -83,7 +83,7 @@ pub use crate::{
     },
     effect::{Effect, EffectError, EffectStateStorage, Effects, emit_effect, take_effects},
     error::PrettyPrintError,
-    handle::{HandleTag, TurboTasksHandle},
+    handle::{HandleTag, TurboTasksHandle, TurboTasksWeakHandle},
     id::{ExecutionId, LocalTaskId, TRANSIENT_TASK_BIT, TaskId, TraitTypeId, ValueTypeId},
     invalidation::{
         InvalidationReason, InvalidationReasonKind, InvalidationReasonSet, Invalidator,

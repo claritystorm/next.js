@@ -178,6 +178,47 @@ mod prod {
         }
     }
 
+    // ---- Weak refcount providers -----------------------------------------
+
+    #[unsafe(no_mangle)]
+    pub extern "Rust" fn __tt_prod_downgrade(arc_ptr: *const ()) -> *const () {
+        // Reconstitute the Arc transiently to call `downgrade`, then leak
+        // the Arc back so its refcount is unchanged. The Weak we produce
+        // owns its own weak refcount.
+        let arc = unsafe { Arc::from_raw(arc_ptr as *const ProdHandleConcrete) };
+        let weak = Arc::downgrade(&arc);
+        ::std::mem::forget(arc);
+        ::std::sync::Weak::into_raw(weak) as *const ()
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "Rust" fn __tt_prod_upgrade(weak_ptr: *const ()) -> *const () {
+        // Reconstitute the Weak transiently to attempt upgrade, then leak
+        // it back so its refcount is unchanged.
+        let weak = unsafe { ::std::sync::Weak::from_raw(weak_ptr as *const ProdHandleConcrete) };
+        let maybe_arc = weak.upgrade();
+        ::std::mem::forget(weak);
+        match maybe_arc {
+            Some(arc) => Arc::into_raw(arc) as *const (),
+            None => ::std::ptr::null(),
+        }
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "Rust" fn __tt_prod_clone_weak(weak_ptr: *const ()) {
+        // `Weak` has no `increment_weak_count` API, so we round-trip
+        // through `Weak::clone` and leak both copies.
+        let weak = unsafe { ::std::sync::Weak::from_raw(weak_ptr as *const ProdHandleConcrete) };
+        let cloned = weak.clone();
+        ::std::mem::forget(weak);
+        ::std::mem::forget(cloned);
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "Rust" fn __tt_prod_drop_weak(weak_ptr: *const ()) {
+        drop(unsafe { ::std::sync::Weak::from_raw(weak_ptr as *const ProdHandleConcrete) });
+    }
+
     /// Constructs a `TurboTasksHandle` pointing at the given prod Arc.
     ///
     /// The caller transfers ownership of one refcount into the handle.
@@ -325,6 +366,40 @@ mod test_arm {
         unsafe {
             Arc::<TestHandleConcrete>::decrement_strong_count(ptr as *const TestHandleConcrete)
         }
+    }
+
+    // ---- Weak refcount providers -----------------------------------------
+
+    #[unsafe(no_mangle)]
+    pub extern "Rust" fn __tt_test_downgrade(arc_ptr: *const ()) -> *const () {
+        let arc = unsafe { Arc::from_raw(arc_ptr as *const TestHandleConcrete) };
+        let weak = Arc::downgrade(&arc);
+        ::std::mem::forget(arc);
+        ::std::sync::Weak::into_raw(weak) as *const ()
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "Rust" fn __tt_test_upgrade(weak_ptr: *const ()) -> *const () {
+        let weak = unsafe { ::std::sync::Weak::from_raw(weak_ptr as *const TestHandleConcrete) };
+        let maybe_arc = weak.upgrade();
+        ::std::mem::forget(weak);
+        match maybe_arc {
+            Some(arc) => Arc::into_raw(arc) as *const (),
+            None => ::std::ptr::null(),
+        }
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "Rust" fn __tt_test_clone_weak(weak_ptr: *const ()) {
+        let weak = unsafe { ::std::sync::Weak::from_raw(weak_ptr as *const TestHandleConcrete) };
+        let cloned = weak.clone();
+        ::std::mem::forget(weak);
+        ::std::mem::forget(cloned);
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "Rust" fn __tt_test_drop_weak(weak_ptr: *const ()) {
+        drop(unsafe { ::std::sync::Weak::from_raw(weak_ptr as *const TestHandleConcrete) });
     }
 
     pub fn from_test(arc: Arc<TestHandleConcrete>) -> TurboTasksHandle {
