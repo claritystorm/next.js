@@ -15,6 +15,17 @@ hanging_detection = []
 task_id_details = []
 verify_determinism = []
 
+# Handle dispatch arms. These are activated by feature unification:
+#   turbo-tasks-backend deps on turbo-tasks [prod_handle]
+#   turbo-tasks-testing deps on turbo-tasks [test_handle]
+# Anything that transitively links one or both of those crates gets the
+# corresponding HandleTag variants, extern "Rust" forward decls, and
+# `match` arms in TurboTasksHandle's forwarder methods.
+# Pure-prod binaries (the napi binding) get a one-arm enum so LLVM
+# collapses the match in each forwarder to a direct call.
+prod_handle = []
+test_handle = []
+
 # TODO(bgw): This feature is here to unblock turning on local tasks by default. It's only turned on
 # in unit tests. This will be removed very soon.
 non_operation_vc_strongly_consistent = []

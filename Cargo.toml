@@ -178,7 +178,6 @@ turbo-tasks-bytes = { path = "turbopack/crates/turbo-tasks-bytes" }
 turbo-tasks-env = { path = "turbopack/crates/turbo-tasks-env" }
 turbo-tasks-fetch = { path = "turbopack/crates/turbo-tasks-fetch" }
 turbo-tasks-fs = { path = "turbopack/crates/turbo-tasks-fs" }
-turbo-tasks-handle = { path = "turbopack/crates/turbo-tasks-handle", default-features = false }
 turbo-tasks-hash = { path = "turbopack/crates/turbo-tasks-hash" }
 turbo-tasks-macros = { path = "turbopack/crates/turbo-tasks-macros" }
 turbo-tasks-malloc = { path = "turbopack/crates/turbo-tasks-malloc", default-features = false }

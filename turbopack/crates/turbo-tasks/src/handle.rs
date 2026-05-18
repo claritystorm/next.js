@@ -31,35 +31,42 @@
 //! two-arm enum it compiles to `cmp + b.ne + direct call` and LLVM can
 //! sometimes fuse the arms further.
 //!
-//! Providers (the `__tt_<arm>_<method>` symbols) live in the
-//! `turbo-tasks-handle` crate. That crate depends on both
-//! `turbo-tasks-backend` (for the prod arm) and `turbo-tasks-testing`
-//! (for the test arm); each arm is gated by a Cargo feature. By centralising
-//! the providers in one crate, we have exactly one place that knows about
-//! the dispatch contract.
+//! ## Feature gating
+//!
+//! Two Cargo features on `turbo-tasks` control which dispatch arms exist:
+//!
+//! - `prod_handle` — activated by `turbo-tasks-backend` (which owns the concrete production handle
+//!   type and emits the `__tt_prod_*` providers). Pulled in transitively by anything that links the
+//!   backend, including the napi binding.
+//! - `test_handle` — activated by `turbo-tasks-testing` (which owns `VcStorage` and emits the
+//!   `__tt_test_*` providers).
+//!
+//! A pure-prod binary (e.g. the napi binding) sees `HandleTag` with only
+//! the `Prod` variant and the `match` in each forwarder collapses to a
+//! direct call. A workspace test build sees both variants and gets the
+//! two-arm match. Features unify across the dep graph; consumers do not
+//! enable the features directly.
 
 use std::ptr::NonNull;
-
-// Re-export the macro for use by `turbo-tasks-handle`'s provider macro,
-// which needs to iterate over the same method list.
-//
-// TODO: when we add `turbo_tasks_weak()` to the dispatch surface, also
-// generate `__tt_<arm>_downgrade` / `upgrade` and a `TurboTasksWeakHandle`
-// type. For now `turbo_tasks_weak` keeps returning `Weak<dyn TurboTasksApi>`
-// because its only consumer (`turbo_tasks_future_scope`) is not on a hot path.
 
 /// Identifier for which concrete implementation a [`TurboTasksHandle`] points
 /// at. Used as the tag in the tagged-pointer dispatch.
 ///
-/// New variants must coordinate with `turbo-tasks-handle`'s provider
-/// emission and with every caller's `match` against this tag.
+/// Variants are feature-gated. A pure-prod build (only `prod_handle`
+/// active) has only the `Prod` variant, which makes every dispatch
+/// `match` a one-arm collapse — LLVM emits a direct call to the
+/// `__tt_prod_*` symbol with no comparison. The two-arm case (both
+/// features active, e.g. workspace tests) compiles to `cmp + b.ne +
+/// direct call`.
 #[repr(u8)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum HandleTag {
     /// `TurboTasks<TurboTasksBackend<…>>` — the production handle used by
     /// `next-napi-bindings`, benches, etc.
+    #[cfg(feature = "prod_handle")]
     Prod = 0,
     /// `VcStorage` — the test-only handle used by `turbo-tasks-testing`.
+    #[cfg(feature = "test_handle")]
     Test = 1,
 }
 
@@ -127,21 +134,27 @@ impl TurboTasksHandle {
 // time. Thin LTO inlines them.
 // =====================================================================
 
-/// Generates an `unsafe extern "Rust" { fn __tt_prod_<name>(...); fn
-/// __tt_test_<name>(...); }` declaration pair for one dispatched method.
+/// Generates feature-gated `unsafe extern "Rust" { fn __tt_<arm>_<name>; }`
+/// declarations. With only `prod_handle` active, only the prod decl is
+/// emitted; with only `test_handle`, only the test decl. With both, both.
 macro_rules! tt_decl_extern {
     (
         fn $name:ident( $($arg:ident : $ty:ty),* $(,)? ) $(-> $ret:ty)?
     ) => {
         unsafe extern "Rust" {
+            #[cfg(feature = "prod_handle")]
             fn ${concat(__tt_prod_, $name)}(ptr: *const () $(, $arg : $ty)*) $(-> $ret)?;
+            #[cfg(feature = "test_handle")]
             fn ${concat(__tt_test_, $name)}(ptr: *const () $(, $arg : $ty)*) $(-> $ret)?;
         }
     };
 }
 
 /// Generates an inherent method on `TurboTasksHandle` that dispatches over
-/// `match self.tag` to the corresponding `extern "Rust"` symbol.
+/// `match self.tag` to the corresponding `extern "Rust"` symbol. The match
+/// arms are feature-gated alongside the [`HandleTag`] variants and the
+/// extern decls, so single-variant builds get a one-arm match that LLVM
+/// collapses to a direct call.
 macro_rules! tt_decl_handle_method {
     (
         fn $name:ident( $($arg:ident : $ty:ty),* $(,)? ) $(-> $ret:ty)?
@@ -150,9 +163,11 @@ macro_rules! tt_decl_handle_method {
             #[inline]
             pub fn $name(&self $(, $arg : $ty)*) $(-> $ret)? {
                 match self.tag {
+                    #[cfg(feature = "prod_handle")]
                     HandleTag::Prod => unsafe {
                         ${concat(__tt_prod_, $name)}(self.ptr.as_ptr() $(, $arg)*)
                     },
+                    #[cfg(feature = "test_handle")]
                     HandleTag::Test => unsafe {
                         ${concat(__tt_test_, $name)}(self.ptr.as_ptr() $(, $arg)*)
                     },
@@ -410,9 +425,11 @@ tt_decl_handle_method!(fn is_tracking_dependencies() -> bool);
 // receiver, so the providers return `*const TaskStatisticsApi` and the
 // handle wrapper re-binds the lifetime to `&self`.
 unsafe extern "Rust" {
+    #[cfg(feature = "prod_handle")]
     fn __tt_prod_task_statistics(
         ptr: *const (),
     ) -> *const crate::task_statistics::TaskStatisticsApi;
+    #[cfg(feature = "test_handle")]
     fn __tt_test_task_statistics(
         ptr: *const (),
     ) -> *const crate::task_statistics::TaskStatisticsApi;
@@ -426,7 +443,9 @@ impl TurboTasksHandle {
         // handle holds alive via its Arc. The returned reference is bound
         // to `&self`.
         let ptr = match self.tag {
+            #[cfg(feature = "prod_handle")]
             HandleTag::Prod => unsafe { __tt_prod_task_statistics(self.ptr.as_ptr()) },
+            #[cfg(feature = "test_handle")]
             HandleTag::Test => unsafe { __tt_test_task_statistics(self.ptr.as_ptr()) },
         };
         unsafe { &*ptr }
@@ -438,9 +457,13 @@ impl TurboTasksHandle {
 // =====================================================================
 
 unsafe extern "Rust" {
+    #[cfg(feature = "prod_handle")]
     fn __tt_prod_clone_arc(ptr: *const ());
+    #[cfg(feature = "prod_handle")]
     fn __tt_prod_drop_arc(ptr: *const ());
+    #[cfg(feature = "test_handle")]
     fn __tt_test_clone_arc(ptr: *const ());
+    #[cfg(feature = "test_handle")]
     fn __tt_test_drop_arc(ptr: *const ());
 
     // Weak-handle support. Each arm provides:
@@ -450,13 +473,21 @@ unsafe extern "Rust" {
     //               Arc is gone; otherwise transfers one strong refcount).
     //   clone_weak: bumps the weak refcount.
     //   drop_weak : drops the weak refcount.
+    #[cfg(feature = "prod_handle")]
     fn __tt_prod_downgrade(arc_ptr: *const ()) -> *const ();
+    #[cfg(feature = "prod_handle")]
     fn __tt_prod_upgrade(weak_ptr: *const ()) -> *const ();
+    #[cfg(feature = "prod_handle")]
     fn __tt_prod_clone_weak(weak_ptr: *const ());
+    #[cfg(feature = "prod_handle")]
     fn __tt_prod_drop_weak(weak_ptr: *const ());
+    #[cfg(feature = "test_handle")]
     fn __tt_test_downgrade(arc_ptr: *const ()) -> *const ();
+    #[cfg(feature = "test_handle")]
     fn __tt_test_upgrade(weak_ptr: *const ()) -> *const ();
+    #[cfg(feature = "test_handle")]
     fn __tt_test_clone_weak(weak_ptr: *const ());
+    #[cfg(feature = "test_handle")]
     fn __tt_test_drop_weak(weak_ptr: *const ());
 }
 
@@ -464,7 +495,9 @@ impl Clone for TurboTasksHandle {
     #[inline]
     fn clone(&self) -> Self {
         match self.tag {
+            #[cfg(feature = "prod_handle")]
             HandleTag::Prod => unsafe { __tt_prod_clone_arc(self.ptr.as_ptr()) },
+            #[cfg(feature = "test_handle")]
             HandleTag::Test => unsafe { __tt_test_clone_arc(self.ptr.as_ptr()) },
         }
         Self {
@@ -478,7 +511,9 @@ impl Drop for TurboTasksHandle {
     #[inline]
     fn drop(&mut self) {
         match self.tag {
+            #[cfg(feature = "prod_handle")]
             HandleTag::Prod => unsafe { __tt_prod_drop_arc(self.ptr.as_ptr()) },
+            #[cfg(feature = "test_handle")]
             HandleTag::Test => unsafe { __tt_test_drop_arc(self.ptr.as_ptr()) },
         }
     }
@@ -489,7 +524,9 @@ impl TurboTasksHandle {
     #[inline]
     pub fn downgrade(&self) -> TurboTasksWeakHandle {
         let weak_ptr = match self.tag {
+            #[cfg(feature = "prod_handle")]
             HandleTag::Prod => unsafe { __tt_prod_downgrade(self.ptr.as_ptr()) },
+            #[cfg(feature = "test_handle")]
             HandleTag::Test => unsafe { __tt_test_downgrade(self.ptr.as_ptr()) },
         };
         TurboTasksWeakHandle {
@@ -534,7 +571,9 @@ impl TurboTasksWeakHandle {
     #[inline]
     pub fn upgrade(&self) -> Option<TurboTasksHandle> {
         let strong_ptr = match self.tag {
+            #[cfg(feature = "prod_handle")]
             HandleTag::Prod => unsafe { __tt_prod_upgrade(self.ptr.as_ptr()) },
+            #[cfg(feature = "test_handle")]
             HandleTag::Test => unsafe { __tt_test_upgrade(self.ptr.as_ptr()) },
         };
         let strong_ptr = NonNull::new(strong_ptr as *mut ())?;
@@ -549,7 +588,9 @@ impl Clone for TurboTasksWeakHandle {
     #[inline]
     fn clone(&self) -> Self {
         match self.tag {
+            #[cfg(feature = "prod_handle")]
             HandleTag::Prod => unsafe { __tt_prod_clone_weak(self.ptr.as_ptr()) },
+            #[cfg(feature = "test_handle")]
             HandleTag::Test => unsafe { __tt_test_clone_weak(self.ptr.as_ptr()) },
         }
         Self {
@@ -563,7 +604,9 @@ impl Drop for TurboTasksWeakHandle {
     #[inline]
     fn drop(&mut self) {
         match self.tag {
+            #[cfg(feature = "prod_handle")]
             HandleTag::Prod => unsafe { __tt_prod_drop_weak(self.ptr.as_ptr()) },
+            #[cfg(feature = "test_handle")]
             HandleTag::Test => unsafe { __tt_test_drop_weak(self.ptr.as_ptr()) },
         }
     }

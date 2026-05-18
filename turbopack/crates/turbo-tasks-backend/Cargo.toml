@@ -58,7 +58,7 @@ tracing = { workspace = true }
 turbo-bincode = { workspace = true }
 turbo-persistence = { workspace = true }
 turbo-rcstr = { workspace = true }
-turbo-tasks = { workspace = true }
+turbo-tasks = { workspace = true, features = ["prod_handle"] }
 turbo-tasks-hash = { workspace = true }
 turbo-tasks-malloc = { workspace = true, default-features = false }
 thread_local = { workspace = true }
@@ -73,10 +73,6 @@ triomphe = { workspace = true }
 turbo-tasks-malloc = { workspace = true , features = ["custom_allocator"]}
 rstest = { workspace = true }
 turbo-tasks-testing = { workspace = true }
-# Tests and benches construct real `TurboTasks<B>` instances; some also
-# use `VcStorage` via `turbo-tasks-testing`. Pull in both arms of the
-# handle dispatch so the extern "Rust" symbols are linked.
-turbo-tasks-handle = { workspace = true, features = ["prod", "test"] }
 
 
 [[bench]]

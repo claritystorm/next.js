@@ -4947,7 +4947,6 @@ dependencies = [
  "turbo-tasks",
  "turbo-tasks-backend",
  "turbo-tasks-fs",
- "turbo-tasks-handle",
  "turbo-tasks-malloc",
  "turbo-unix-path",
  "turbopack-core",
@@ -9893,7 +9892,6 @@ dependencies = [
  "turbo-persistence",
  "turbo-rcstr",
  "turbo-tasks",
- "turbo-tasks-handle",
  "turbo-tasks-hash",
  "turbo-tasks-malloc",
  "turbo-tasks-testing",
@@ -10016,19 +10014,6 @@ dependencies = [
  "turbo-tasks",
  "turbo-tasks-backend",
  "turbo-tasks-fs",
-]
-
-[[package]]
-name = "turbo-tasks-handle"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "either",
- "smallvec",
- "tokio",
- "turbo-tasks",
- "turbo-tasks-backend",
- "turbo-tasks-testing",
 ]
 
 [[package]]

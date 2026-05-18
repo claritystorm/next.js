@@ -651,11 +651,16 @@ impl<B: Backend + 'static> TurboTasks<B> {
     /// Builds a [`TurboTasksHandle`] that points at this `TurboTasks<B>`.
     /// Consumes one strong refcount from the given `Arc<Self>`; the handle
     /// will drop that refcount when itself dropped.
+    ///
+    /// Only available when the `prod_handle` feature is enabled (i.e. when
+    /// `turbo-tasks-backend` is in the dep graph).
+    #[cfg(feature = "prod_handle")]
     pub fn make_handle(self: Arc<Self>) -> crate::TurboTasksHandle {
         let ptr = Arc::into_raw(self) as *mut ();
         // Safety: `ptr` came from `Arc::into_raw` on a `TurboTasks<B>`,
-        // which `turbo-tasks-handle`'s `__tt_prod_*` providers know how to
-        // cast back to. Tag is consistent with the prod arm by definition.
+        // which the `__tt_prod_*` providers (in `turbo-tasks-backend`)
+        // know how to cast back to. Tag is consistent with the prod arm
+        // by definition.
         unsafe {
             crate::TurboTasksHandle::from_raw_parts(
                 crate::HandleTag::Prod,
@@ -667,6 +672,7 @@ impl<B: Backend + 'static> TurboTasks<B> {
     /// Builds a [`TurboTasksHandle`] for this `TurboTasks<B>` instance.
     /// Helper that clones the internal `Arc<Self>` first; equivalent to
     /// `self.pin().make_handle()`.
+    #[cfg(feature = "prod_handle")]
     pub fn make_handle_from_ref(&self) -> crate::TurboTasksHandle {
         self.pin().make_handle()
     }

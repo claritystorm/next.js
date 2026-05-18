@@ -2,6 +2,12 @@
 #![feature(arbitrary_self_types_pointers)]
 #![allow(clippy::needless_return)] // tokio macro-generated code doesn't respect this
 
+// Force linkage of `__tt_test_*` providers. This test doesn't `use`
+// anything from `turbo_tasks_testing`, but the feature unification of
+// `test_handle` on `turbo-tasks` (active because dev-deps bring it in
+// through other means) makes the lib reference `__tt_test_*` symbols.
+extern crate turbo_tasks_testing;
+
 use std::sync::{
     Arc,
     atomic::{AtomicBool, AtomicU64, Ordering},

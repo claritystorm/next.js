@@ -19,5 +19,5 @@ futures = { workspace = true }
 rustc-hash = { workspace = true }
 smallvec = { workspace = true }
 tokio = { workspace = true }
-turbo-tasks = { workspace = true, features = ["non_operation_vc_strongly_consistent"] }
+turbo-tasks = { workspace = true, features = ["non_operation_vc_strongly_consistent", "test_handle"] }
 turbo-tasks-backend = { workspace = true }
