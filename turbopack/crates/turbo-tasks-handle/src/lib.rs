@@ -38,11 +38,15 @@ pub type ProdHandleConcrete = turbo_tasks::TurboTasks<
 
 #[cfg(feature = "prod")]
 mod prod {
+    use turbo_tasks::{TurboTasksApi as _, TurboTasksCallApi as _};
+
     use super::*;
 
     /// Generates `#[no_mangle] pub extern "Rust" fn __tt_prod_<name>(...)`
     /// for a single dispatched method. The body casts `ptr` back to
-    /// `&ProdHandleConcrete` and forwards to the trait method.
+    /// `&ProdHandleConcrete` and forwards through method call syntax so
+    /// both `TurboTasksApi` and `TurboTasksCallApi` methods resolve
+    /// correctly (the former is a super-trait of the latter).
     macro_rules! provide_prod {
         (
             fn $name:ident( $($arg:ident : $ty:ty),* $(,)? ) $(-> $ret:ty)?
@@ -53,7 +57,7 @@ mod prod {
                 $(, $arg : $ty)*
             ) $(-> $ret)? {
                 let tt: &ProdHandleConcrete = unsafe { &*(ptr as *const ProdHandleConcrete) };
-                <ProdHandleConcrete as turbo_tasks::TurboTasksApi>::$name(tt $(, $arg)*)
+                tt.$name($($arg),*)
             }
         };
     }
@@ -66,32 +70,112 @@ mod prod {
     // generate both from a shared callback macro, but for now duplicating
     // the list is the simplest source-of-truth.
 
+    // TurboTasksCallApi
+    provide_prod!(fn dynamic_call(
+        native_fn: &'static turbo_tasks::macro_helpers::NativeFunction,
+        this: Option<turbo_tasks::RawVc>,
+        arg: &mut dyn turbo_tasks::StackDynTaskInputs,
+        persistence: turbo_tasks::TaskPersistence,
+    ) -> turbo_tasks::RawVc);
+    provide_prod!(fn native_call(
+        native_fn: &'static turbo_tasks::macro_helpers::NativeFunction,
+        this: Option<turbo_tasks::RawVc>,
+        arg: &mut dyn turbo_tasks::StackDynTaskInputs,
+        persistence: turbo_tasks::TaskPersistence,
+    ) -> turbo_tasks::RawVc);
+    provide_prod!(fn trait_call(
+        trait_method: &'static turbo_tasks::TraitMethod,
+        this: turbo_tasks::RawVc,
+        arg: &mut dyn turbo_tasks::StackDynTaskInputs,
+        persistence: turbo_tasks::TaskPersistence,
+    ) -> turbo_tasks::RawVc);
+    provide_prod!(fn send_compilation_event(
+        event: ::std::sync::Arc<dyn turbo_tasks::message_queue::CompilationEvent>,
+    ));
+    provide_prod!(fn get_task_name(task: turbo_tasks::TaskId) -> ::std::string::String);
+
+    // TurboTasksApi
     provide_prod!(fn invalidate(task: turbo_tasks::TaskId));
+    provide_prod!(fn invalidate_with_reason(
+        task: turbo_tasks::TaskId,
+        reason: turbo_tasks::util::StaticOrArc<dyn turbo_tasks::InvalidationReason>,
+    ));
+    provide_prod!(fn invalidate_serialization(task: turbo_tasks::TaskId));
+    provide_prod!(fn try_read_task_output(
+        task: turbo_tasks::TaskId,
+        options: turbo_tasks::ReadOutputOptions,
+    ) -> ::anyhow::Result<::core::result::Result<turbo_tasks::RawVc, turbo_tasks::event::EventListener>>);
+    provide_prod!(fn try_read_task_cell(
+        task: turbo_tasks::TaskId,
+        index: turbo_tasks::CellId,
+        options: turbo_tasks::ReadCellOptions,
+    ) -> ::anyhow::Result<::core::result::Result<turbo_tasks::backend::TypedCellContent, turbo_tasks::event::EventListener>>);
+    provide_prod!(fn try_read_local_output(
+        execution_id: turbo_tasks::ExecutionId,
+        local_task_id: turbo_tasks::LocalTaskId,
+    ) -> ::anyhow::Result<::core::result::Result<turbo_tasks::RawVc, turbo_tasks::event::EventListener>>);
+    provide_prod!(fn read_task_collectibles(
+        task: turbo_tasks::TaskId,
+        trait_id: turbo_tasks::TraitTypeId,
+    ) -> turbo_tasks::backend::TaskCollectiblesMap);
+    provide_prod!(fn emit_collectible(
+        trait_type: turbo_tasks::TraitTypeId,
+        collectible: turbo_tasks::RawVc,
+    ));
+    provide_prod!(fn unemit_collectible(
+        trait_type: turbo_tasks::TraitTypeId,
+        collectible: turbo_tasks::RawVc,
+        count: u32,
+    ));
+    provide_prod!(fn unemit_collectibles(
+        trait_type: turbo_tasks::TraitTypeId,
+        collectibles: &turbo_tasks::backend::TaskCollectiblesMap,
+    ));
+    provide_prod!(fn try_read_own_task_cell(
+        current_task: turbo_tasks::TaskId,
+        index: turbo_tasks::CellId,
+    ) -> ::anyhow::Result<turbo_tasks::backend::TypedCellContent>);
+    provide_prod!(fn read_own_task_cell(
+        task: turbo_tasks::TaskId,
+        index: turbo_tasks::CellId,
+    ) -> ::anyhow::Result<turbo_tasks::backend::TypedCellContent>);
+    provide_prod!(fn update_own_task_cell(
+        task: turbo_tasks::TaskId,
+        index: turbo_tasks::CellId,
+        content: turbo_tasks::backend::CellContent,
+        updated_key_hashes: ::core::option::Option<::smallvec::SmallVec<[u64; 2]>>,
+        content_hash: ::core::option::Option<turbo_tasks::backend::CellHash>,
+        verification_mode: turbo_tasks::backend::VerificationMode,
+    ));
+    provide_prod!(fn mark_own_task_as_finished(task: turbo_tasks::TaskId));
+    provide_prod!(fn connect_task(task: turbo_tasks::TaskId));
+    provide_prod!(fn spawn_detached_for_testing(
+        f: ::std::pin::Pin<::std::boxed::Box<dyn ::std::future::Future<Output = ()> + ::core::marker::Send + 'static>>,
+    ));
+    provide_prod!(fn subscribe_to_compilation_events(
+        event_types: ::core::option::Option<::std::vec::Vec<::std::string::String>>,
+    ) -> ::tokio::sync::mpsc::Receiver<::std::sync::Arc<dyn turbo_tasks::message_queue::CompilationEvent>>);
+    provide_prod!(fn is_tracking_dependencies() -> bool);
 
     // ---- Arc clone / drop -------------------------------------------------
 
     #[unsafe(no_mangle)]
     pub extern "Rust" fn __tt_prod_clone_arc(ptr: *const ()) {
-        // Reconstitute the Arc transiently to bump the refcount, then leak
-        // it again so the next drop sees the same pointer.
-        let arc = unsafe { Arc::from_raw(ptr as *const ProdHandleConcrete) };
-        let cloned = arc.clone();
-        // Re-leak the original to keep the original handle alive.
-        std::mem::forget(arc);
-        // The clone is owned by the new handle that triggered this call;
-        // leak its pointer so the new handle owns it.
-        let _new_ptr = Arc::into_raw(cloned);
-        // `_new_ptr` must equal `ptr` because Arc::into_raw is reproducible
-        // for the same Arc — the new handle keeps `ptr` and we discard
-        // `_new_ptr`. (See the Drop impl in turbo-tasks for the matching
-        // decrement; both ends use the same pointer value.)
-        debug_assert_eq!(_new_ptr as *const (), ptr);
+        // Bump the refcount of the Arc whose data pointer is `ptr`. The
+        // caller (`<TurboTasksHandle as Clone>::clone`) is responsible for
+        // reusing the same `ptr` value in the new handle, so we don't need
+        // to return anything.
+        unsafe {
+            Arc::<ProdHandleConcrete>::increment_strong_count(ptr as *const ProdHandleConcrete)
+        }
     }
 
     #[unsafe(no_mangle)]
     pub extern "Rust" fn __tt_prod_drop_arc(ptr: *const ()) {
-        // Reconstitute the Arc to decrement and drop.
-        drop(unsafe { Arc::from_raw(ptr as *const ProdHandleConcrete) });
+        // Decrement the refcount; runs the destructor when it reaches zero.
+        unsafe {
+            Arc::<ProdHandleConcrete>::decrement_strong_count(ptr as *const ProdHandleConcrete)
+        }
     }
 
     /// Constructs a `TurboTasksHandle` pointing at the given prod Arc.
@@ -116,6 +200,8 @@ pub use prod::from_prod;
 
 #[cfg(feature = "test")]
 mod test_arm {
+    use turbo_tasks::{TurboTasksApi as _, TurboTasksCallApi as _};
+
     use super::*;
 
     pub type TestHandleConcrete = turbo_tasks_testing::VcStorage;
@@ -130,7 +216,7 @@ mod test_arm {
                 $(, $arg : $ty)*
             ) $(-> $ret)? {
                 let tt: &TestHandleConcrete = unsafe { &*(ptr as *const TestHandleConcrete) };
-                <TestHandleConcrete as turbo_tasks::TurboTasksApi>::$name(tt $(, $arg)*)
+                tt.$name($($arg),*)
             }
         };
     }
@@ -138,22 +224,107 @@ mod test_arm {
     // ---- dispatched methods ----------------------------------------------
     // (Mirror of the `prod` block — keep in sync.)
 
+    // TurboTasksCallApi
+    provide_test!(fn dynamic_call(
+        native_fn: &'static turbo_tasks::macro_helpers::NativeFunction,
+        this: Option<turbo_tasks::RawVc>,
+        arg: &mut dyn turbo_tasks::StackDynTaskInputs,
+        persistence: turbo_tasks::TaskPersistence,
+    ) -> turbo_tasks::RawVc);
+    provide_test!(fn native_call(
+        native_fn: &'static turbo_tasks::macro_helpers::NativeFunction,
+        this: Option<turbo_tasks::RawVc>,
+        arg: &mut dyn turbo_tasks::StackDynTaskInputs,
+        persistence: turbo_tasks::TaskPersistence,
+    ) -> turbo_tasks::RawVc);
+    provide_test!(fn trait_call(
+        trait_method: &'static turbo_tasks::TraitMethod,
+        this: turbo_tasks::RawVc,
+        arg: &mut dyn turbo_tasks::StackDynTaskInputs,
+        persistence: turbo_tasks::TaskPersistence,
+    ) -> turbo_tasks::RawVc);
+    provide_test!(fn send_compilation_event(
+        event: ::std::sync::Arc<dyn turbo_tasks::message_queue::CompilationEvent>,
+    ));
+    provide_test!(fn get_task_name(task: turbo_tasks::TaskId) -> ::std::string::String);
+
+    // TurboTasksApi
     provide_test!(fn invalidate(task: turbo_tasks::TaskId));
+    provide_test!(fn invalidate_with_reason(
+        task: turbo_tasks::TaskId,
+        reason: turbo_tasks::util::StaticOrArc<dyn turbo_tasks::InvalidationReason>,
+    ));
+    provide_test!(fn invalidate_serialization(task: turbo_tasks::TaskId));
+    provide_test!(fn try_read_task_output(
+        task: turbo_tasks::TaskId,
+        options: turbo_tasks::ReadOutputOptions,
+    ) -> ::anyhow::Result<::core::result::Result<turbo_tasks::RawVc, turbo_tasks::event::EventListener>>);
+    provide_test!(fn try_read_task_cell(
+        task: turbo_tasks::TaskId,
+        index: turbo_tasks::CellId,
+        options: turbo_tasks::ReadCellOptions,
+    ) -> ::anyhow::Result<::core::result::Result<turbo_tasks::backend::TypedCellContent, turbo_tasks::event::EventListener>>);
+    provide_test!(fn try_read_local_output(
+        execution_id: turbo_tasks::ExecutionId,
+        local_task_id: turbo_tasks::LocalTaskId,
+    ) -> ::anyhow::Result<::core::result::Result<turbo_tasks::RawVc, turbo_tasks::event::EventListener>>);
+    provide_test!(fn read_task_collectibles(
+        task: turbo_tasks::TaskId,
+        trait_id: turbo_tasks::TraitTypeId,
+    ) -> turbo_tasks::backend::TaskCollectiblesMap);
+    provide_test!(fn emit_collectible(
+        trait_type: turbo_tasks::TraitTypeId,
+        collectible: turbo_tasks::RawVc,
+    ));
+    provide_test!(fn unemit_collectible(
+        trait_type: turbo_tasks::TraitTypeId,
+        collectible: turbo_tasks::RawVc,
+        count: u32,
+    ));
+    provide_test!(fn unemit_collectibles(
+        trait_type: turbo_tasks::TraitTypeId,
+        collectibles: &turbo_tasks::backend::TaskCollectiblesMap,
+    ));
+    provide_test!(fn try_read_own_task_cell(
+        current_task: turbo_tasks::TaskId,
+        index: turbo_tasks::CellId,
+    ) -> ::anyhow::Result<turbo_tasks::backend::TypedCellContent>);
+    provide_test!(fn read_own_task_cell(
+        task: turbo_tasks::TaskId,
+        index: turbo_tasks::CellId,
+    ) -> ::anyhow::Result<turbo_tasks::backend::TypedCellContent>);
+    provide_test!(fn update_own_task_cell(
+        task: turbo_tasks::TaskId,
+        index: turbo_tasks::CellId,
+        content: turbo_tasks::backend::CellContent,
+        updated_key_hashes: ::core::option::Option<::smallvec::SmallVec<[u64; 2]>>,
+        content_hash: ::core::option::Option<turbo_tasks::backend::CellHash>,
+        verification_mode: turbo_tasks::backend::VerificationMode,
+    ));
+    provide_test!(fn mark_own_task_as_finished(task: turbo_tasks::TaskId));
+    provide_test!(fn connect_task(task: turbo_tasks::TaskId));
+    provide_test!(fn spawn_detached_for_testing(
+        f: ::std::pin::Pin<::std::boxed::Box<dyn ::std::future::Future<Output = ()> + ::core::marker::Send + 'static>>,
+    ));
+    provide_test!(fn subscribe_to_compilation_events(
+        event_types: ::core::option::Option<::std::vec::Vec<::std::string::String>>,
+    ) -> ::tokio::sync::mpsc::Receiver<::std::sync::Arc<dyn turbo_tasks::message_queue::CompilationEvent>>);
+    provide_test!(fn is_tracking_dependencies() -> bool);
 
     // ---- Arc clone / drop -------------------------------------------------
 
     #[unsafe(no_mangle)]
     pub extern "Rust" fn __tt_test_clone_arc(ptr: *const ()) {
-        let arc = unsafe { Arc::from_raw(ptr as *const TestHandleConcrete) };
-        let cloned = arc.clone();
-        std::mem::forget(arc);
-        let _new_ptr = Arc::into_raw(cloned);
-        debug_assert_eq!(_new_ptr as *const (), ptr);
+        unsafe {
+            Arc::<TestHandleConcrete>::increment_strong_count(ptr as *const TestHandleConcrete)
+        }
     }
 
     #[unsafe(no_mangle)]
     pub extern "Rust" fn __tt_test_drop_arc(ptr: *const ()) {
-        drop(unsafe { Arc::from_raw(ptr as *const TestHandleConcrete) });
+        unsafe {
+            Arc::<TestHandleConcrete>::decrement_strong_count(ptr as *const TestHandleConcrete)
+        }
     }
 
     pub fn from_test(arc: Arc<TestHandleConcrete>) -> TurboTasksHandle {

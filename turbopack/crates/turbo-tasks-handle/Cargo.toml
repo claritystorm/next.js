@@ -19,6 +19,9 @@ prod = ["dep:turbo-tasks-backend", "dep:either"]
 test = ["dep:turbo-tasks-testing"]
 
 [dependencies]
+anyhow = { workspace = true }
+smallvec = { workspace = true }
+tokio = { workspace = true, features = ["sync"] }
 turbo-tasks = { workspace = true }
 
 either = { workspace = true, optional = true }
