@@ -58,6 +58,13 @@ use std::ptr::NonNull;
 /// `__tt_prod_*` symbol with no comparison. The two-arm case (both
 /// features active, e.g. workspace tests) compiles to `cmp + b.ne +
 /// direct call`.
+///
+/// When neither feature is active (e.g. building `turbo-tasks` standalone
+/// or downstream consumers that only declare value types and don't link
+/// any backend), the only variant is `Unreachable` — `turbo-tasks`'s lib
+/// still compiles, but constructing or dispatching a handle is a
+/// `unreachable!()` panic. This is intentional: code that builds without
+/// either feature has no concrete implementation to dispatch to.
 #[repr(u8)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum HandleTag {
@@ -68,6 +75,11 @@ pub enum HandleTag {
     /// `VcStorage` — the test-only handle used by `turbo-tasks-testing`.
     #[cfg(feature = "test_handle")]
     Test = 1,
+    /// Placeholder variant kept only so the enum stays inhabited when
+    /// neither provider feature is active. Never constructed at runtime;
+    /// dispatch arms reach `unreachable!()`.
+    #[cfg(not(any(feature = "prod_handle", feature = "test_handle")))]
+    Unreachable = 255,
 }
 
 /// A type-erased reference to a concrete `TurboTasksApi` implementation.
@@ -161,6 +173,7 @@ macro_rules! tt_decl_handle_method {
     ) => {
         impl TurboTasksHandle {
             #[inline]
+            #[allow(unused_variables)]
             pub fn $name(&self $(, $arg : $ty)*) $(-> $ret)? {
                 match self.tag {
                     #[cfg(feature = "prod_handle")]
@@ -171,6 +184,11 @@ macro_rules! tt_decl_handle_method {
                     HandleTag::Test => unsafe {
                         ${concat(__tt_test_, $name)}(self.ptr.as_ptr() $(, $arg)*)
                     },
+                    #[cfg(not(any(feature = "prod_handle", feature = "test_handle")))]
+                    HandleTag::Unreachable => unreachable!(
+                        "TurboTasksHandle dispatch with neither `prod_handle` nor `test_handle` \
+                         feature active on `turbo-tasks`"
+                    ),
                 }
             }
         }
@@ -442,11 +460,13 @@ impl TurboTasksHandle {
         // owned by the underlying `TurboTasks<B>` / `VcStorage`, which the
         // handle holds alive via its Arc. The returned reference is bound
         // to `&self`.
-        let ptr = match self.tag {
+        let ptr: *const crate::task_statistics::TaskStatisticsApi = match self.tag {
             #[cfg(feature = "prod_handle")]
             HandleTag::Prod => unsafe { __tt_prod_task_statistics(self.ptr.as_ptr()) },
             #[cfg(feature = "test_handle")]
             HandleTag::Test => unsafe { __tt_test_task_statistics(self.ptr.as_ptr()) },
+            #[cfg(not(any(feature = "prod_handle", feature = "test_handle")))]
+            HandleTag::Unreachable => unreachable!(),
         };
         unsafe { &*ptr }
     }
@@ -499,6 +519,8 @@ impl Clone for TurboTasksHandle {
             HandleTag::Prod => unsafe { __tt_prod_clone_arc(self.ptr.as_ptr()) },
             #[cfg(feature = "test_handle")]
             HandleTag::Test => unsafe { __tt_test_clone_arc(self.ptr.as_ptr()) },
+            #[cfg(not(any(feature = "prod_handle", feature = "test_handle")))]
+            HandleTag::Unreachable => unreachable!(),
         }
         Self {
             tag: self.tag,
@@ -515,6 +537,8 @@ impl Drop for TurboTasksHandle {
             HandleTag::Prod => unsafe { __tt_prod_drop_arc(self.ptr.as_ptr()) },
             #[cfg(feature = "test_handle")]
             HandleTag::Test => unsafe { __tt_test_drop_arc(self.ptr.as_ptr()) },
+            #[cfg(not(any(feature = "prod_handle", feature = "test_handle")))]
+            HandleTag::Unreachable => unreachable!(),
         }
     }
 }
@@ -528,6 +552,8 @@ impl TurboTasksHandle {
             HandleTag::Prod => unsafe { __tt_prod_downgrade(self.ptr.as_ptr()) },
             #[cfg(feature = "test_handle")]
             HandleTag::Test => unsafe { __tt_test_downgrade(self.ptr.as_ptr()) },
+            #[cfg(not(any(feature = "prod_handle", feature = "test_handle")))]
+            HandleTag::Unreachable => unreachable!(),
         };
         TurboTasksWeakHandle {
             tag: self.tag,
@@ -575,6 +601,8 @@ impl TurboTasksWeakHandle {
             HandleTag::Prod => unsafe { __tt_prod_upgrade(self.ptr.as_ptr()) },
             #[cfg(feature = "test_handle")]
             HandleTag::Test => unsafe { __tt_test_upgrade(self.ptr.as_ptr()) },
+            #[cfg(not(any(feature = "prod_handle", feature = "test_handle")))]
+            HandleTag::Unreachable => unreachable!(),
         };
         let strong_ptr = NonNull::new(strong_ptr as *mut ())?;
         // Safety: the provider returned a non-null `Arc::into_raw` pointer
@@ -592,6 +620,8 @@ impl Clone for TurboTasksWeakHandle {
             HandleTag::Prod => unsafe { __tt_prod_clone_weak(self.ptr.as_ptr()) },
             #[cfg(feature = "test_handle")]
             HandleTag::Test => unsafe { __tt_test_clone_weak(self.ptr.as_ptr()) },
+            #[cfg(not(any(feature = "prod_handle", feature = "test_handle")))]
+            HandleTag::Unreachable => unreachable!(),
         }
         Self {
             tag: self.tag,
@@ -608,6 +638,8 @@ impl Drop for TurboTasksWeakHandle {
             HandleTag::Prod => unsafe { __tt_prod_drop_weak(self.ptr.as_ptr()) },
             #[cfg(feature = "test_handle")]
             HandleTag::Test => unsafe { __tt_test_drop_weak(self.ptr.as_ptr()) },
+            #[cfg(not(any(feature = "prod_handle", feature = "test_handle")))]
+            HandleTag::Unreachable => unreachable!(),
         }
     }
 }

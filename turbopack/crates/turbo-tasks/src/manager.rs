@@ -652,27 +652,41 @@ impl<B: Backend + 'static> TurboTasks<B> {
     /// Consumes one strong refcount from the given `Arc<Self>`; the handle
     /// will drop that refcount when itself dropped.
     ///
-    /// Only available when the `prod_handle` feature is enabled (i.e. when
-    /// `turbo-tasks-backend` is in the dep graph).
-    #[cfg(feature = "prod_handle")]
+    /// When the `prod_handle` feature is active, the returned handle
+    /// dispatches into the `__tt_prod_*` providers (in
+    /// `turbo-tasks-backend`). When neither provider feature is active,
+    /// this still compiles so consumers that merely declare value types
+    /// via `turbo-tasks` macros build, but any dispatch through the
+    /// returned handle will `unreachable!()` at runtime.
     pub fn make_handle(self: Arc<Self>) -> crate::TurboTasksHandle {
+        // Pick the right tag for the current build:
+        //   * `prod_handle` active (with or without `test_handle`) → Prod
+        //   * neither active                                       → Unreachable
+        // A `test_handle`-only build doesn't make sense here (`TurboTasks<B>`
+        // is the prod handle's concrete type) and is not supported.
+        #[cfg(feature = "prod_handle")]
+        let tag = crate::HandleTag::Prod;
+        #[cfg(not(any(feature = "prod_handle", feature = "test_handle")))]
+        let tag = crate::HandleTag::Unreachable;
+        #[cfg(all(feature = "test_handle", not(feature = "prod_handle")))]
+        compile_error!(
+            "TurboTasks::make_handle is unreachable without the `prod_handle` feature active on \
+             `turbo-tasks`. A `test_handle`-only build of `turbo-tasks` that still constructs a \
+             `TurboTasks<B>` is not supported."
+        );
         let ptr = Arc::into_raw(self) as *mut ();
         // Safety: `ptr` came from `Arc::into_raw` on a `TurboTasks<B>`,
         // which the `__tt_prod_*` providers (in `turbo-tasks-backend`)
         // know how to cast back to. Tag is consistent with the prod arm
         // by definition.
         unsafe {
-            crate::TurboTasksHandle::from_raw_parts(
-                crate::HandleTag::Prod,
-                std::ptr::NonNull::new_unchecked(ptr),
-            )
+            crate::TurboTasksHandle::from_raw_parts(tag, std::ptr::NonNull::new_unchecked(ptr))
         }
     }
 
     /// Builds a [`TurboTasksHandle`] for this `TurboTasks<B>` instance.
     /// Helper that clones the internal `Arc<Self>` first; equivalent to
     /// `self.pin().make_handle()`.
-    #[cfg(feature = "prod_handle")]
     pub fn make_handle_from_ref(&self) -> crate::TurboTasksHandle {
         self.pin().make_handle()
     }
