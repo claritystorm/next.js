@@ -51,7 +51,9 @@ at the versions above.
 
 Once per session, confirm both views are live.
 
-1. POST `tools/list` to `/_next/mcp`.
+1. POST `tools/list` to `/_next/mcp`. Send
+   `Accept: application/json, text/event-stream`; responses are
+   SSE-framed, strip the `data: ` prefix before parsing JSON.
    - Unreachable → either `next dev` isn't running, or Next.js is
      below 16.3. Check `package.json` to disambiguate, then refuse.
    - `get_compilation_issues` not in the list → Next.js below 16.3.
@@ -63,32 +65,28 @@ Once per session, confirm both views are live.
 
 ## loop
 
-After an edit, you want to know three things: does it compile, did
-it actually land in the browser, and does the runtime match your
-intent? Each maps to one or both views.
+### before the edit — narrow the scope
 
-**Compilation**: `mcp get_compilation_issues`. Preflight already
-guaranteed it's there.
+Ask the running app, not the codebase. `/_next/mcp` knows which
+files rendered the current route; use those as your search scope.
+Runtime introspection stays cheap as the codebase grows; agentic
+search doesn't.
 
-**Landing in the browser**: if no `agent-browser` session is open,
-open one against the user's installed Chrome with react-devtools
-enabled. Then navigate to the route you actually touched. A hard
-reload is the right call when verifying server-side changes (Server
-Components, route handlers, middleware, layouts, server actions); a
-soft client-router nav is the right call when verifying client-only
-behavior. Don't verify on a stale tab.
+### after the edit — verify
 
-Once a page has loaded, `mcp get_page_metadata` returns the files
-that actually rendered it — segments, layouts, server actions,
-client components. Use it as a discovery shortcut: load the route
-you're about to edit, ask which files power it, and treat those as
-entry points. This stays cheap as the codebase grows; agentic search
-across `app/` doesn't. The same applies to `get_server_action_by_id`
-for tracing a hashed action back to its source.
+Four failure modes. Check each:
 
-**Matching intent**: ask both views the same question. Where they
-agree, the edit worked. Where they disagree, you're looking at a
-real bug or a stale tab — reload and re-check.
+- **Compiles** — `mcp get_compilation_issues`.
+- **Runs without errors** — `/_next/mcp` (server and bubbled-up
+  browser errors both surface here).
+- **Behaves as intended** — `agent-browser` drives the page; assert
+  what the user actually sees.
+- **Doesn't regress performance** — `agent-browser` for network and
+  timing data when the edit could affect runtime cost.
+
+Two views, four checks. They own different dimensions; consult
+both. Pick the specific tool from `tools/list` or `agent-browser
+--help` rather than memorizing the surface.
 
 ## gotchas
 
