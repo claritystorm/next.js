@@ -87,12 +87,6 @@ triomphe = { workspace = true }
 turbo-tasks-malloc = { workspace = true , features = ["custom_allocator"]}
 rstest = { workspace = true }
 turbo-tasks-testing = { workspace = true }
-# Activate `static_handle` for this crate's own tests and benches.
-# `TurboTasksHandle` dispatch through the dynamic arm would panic on the
-# unreachable! arms in `VcStorage` (the test arm only implements the
-# subset of `TurboTasksApi` that pure-storage tests need), so backend
-# tests / benches that drive real work need the static arm wired up.
-turbo-tasks-backend = { workspace = true, features = ["static_handle"] }
 
 
 [[bench]]
