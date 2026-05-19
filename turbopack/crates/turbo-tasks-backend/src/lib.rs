@@ -31,6 +31,36 @@ pub use crate::{
 
 pub type TurboBackingStorage = KeyValueDatabaseBackingStorage<TurboKeyValueDatabase>;
 
+/// Concrete `BackingStorage` type accepted by the prod dispatch arm. The
+/// `__tt_static_*` providers in [`handle_providers`] are monomorphized
+/// for `TurboTasks<TurboTasksBackend<ProdBackingStorage>>`; any caller
+/// that wants its `TurboTasks::new(...)` instance to be drivable through
+/// `TurboTasksHandle` must produce this exact type. The `Either` lets
+/// the same handle type cover both the real on-disk cache and the noop
+/// in-memory variant used by tests and the napi cdylib's `no-cache`
+/// mode.
+pub type ProdBackingStorage = either::Either<TurboBackingStorage, NoopBackingStorage>;
+
+// Re-exported so consumers (test config files, the napi binding) can
+// build a `ProdBackingStorage` without needing a direct dep on `either`.
+pub use either::Either;
+
+/// Wraps a [`TurboBackingStorage`] into [`ProdBackingStorage`] so callers
+/// can hand the result to [`TurboTasksBackend::new`] and end up with the
+/// concrete `TurboTasks<TurboTasksBackend<ProdBackingStorage>>` type the
+/// `__tt_static_*` dispatch providers cast to. Equivalent to writing
+/// `Either::Left(storage)` but doesn't require turbofish for type
+/// inference at the call site.
+pub fn prod_backing_storage_turbo(storage: TurboBackingStorage) -> ProdBackingStorage {
+    Either::Left(storage)
+}
+
+/// Wraps a [`NoopBackingStorage`] into [`ProdBackingStorage`]. See
+/// [`prod_backing_storage_turbo`] for the rationale.
+pub fn prod_backing_storage_noop(storage: NoopBackingStorage) -> ProdBackingStorage {
+    Either::Right(storage)
+}
+
 /// Creates a `BackingStorage` to be passed to [`TurboTasksBackend::new`].
 ///
 /// Information about the state of the on-disk cache is returned using [`StartupCacheState`].

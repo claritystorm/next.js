@@ -4,7 +4,9 @@ use criterion::{BenchmarkId, Criterion, black_box};
 use futures::{FutureExt, StreamExt, stream::FuturesUnordered};
 use tokio::spawn;
 use turbo_tasks::{TurboTasks, unmark_top_level_task_may_leak_eventually_consistent_state};
-use turbo_tasks_backend::{BackendOptions, TurboTasksBackend, noop_backing_storage};
+use turbo_tasks_backend::{
+    BackendOptions, TurboTasksBackend, noop_backing_storage, prod_backing_storage_noop,
+};
 
 #[global_allocator]
 static ALLOC: turbo_tasks_malloc::TurboMalloc = turbo_tasks_malloc::TurboMalloc;
@@ -178,7 +180,9 @@ fn run_turbo<Mode: TurboMode>(
                 storage_mode: None,
                 ..Default::default()
             },
-            noop_backing_storage(),
+            // Wrapped to match `ProdBackingStorage`, the concrete type
+            // the `__tt_static_*` providers cast to.
+            prod_backing_storage_noop(noop_backing_storage()),
         ));
 
         async move {
