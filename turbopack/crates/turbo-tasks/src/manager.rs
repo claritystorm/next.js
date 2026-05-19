@@ -652,21 +652,47 @@ impl<B: Backend + 'static> TurboTasks<B> {
     /// Consumes one strong refcount from the given `Arc<Self>`; the handle
     /// will drop that refcount when itself dropped.
     ///
-    /// The handle is only *meaningfully* usable when the `static_handle`
-    /// feature is active on `turbo-tasks` (activated by
-    /// `turbo-tasks-backend`). Without that feature, calling any
-    /// dispatch method on the returned handle panics — but the body
-    /// stays defined so that other inherent methods on `TurboTasks<B>`
-    /// (executor impls, foreground/background scheduling) compile in
-    /// builds that don't link a backend.
+    /// When the `static_handle` feature is active on `turbo-tasks` (set
+    /// by binaries that link `turbo-tasks-backend` with its
+    /// `static_handle` feature on — i.e. the napi binding), this builds
+    /// a `Static` handle that dispatches through `extern "Rust"`
+    /// providers — fully devirtualized under thin LTO.
+    ///
+    /// Otherwise (typical workspace test/bench builds, where backend's
+    /// `static_handle` is off to avoid spreading the externs through
+    /// feature unification), this falls back to a `Dynamic` handle —
+    /// `Arc<dyn TurboTasksApi>` vtable dispatch. The fallback works
+    /// because `TurboTasks<B>` itself implements `TurboTasksApi`. Slower
+    /// (one vtable indirection per dispatched call) but correct.
+    #[cfg(feature = "static_handle")]
     pub fn make_handle(self: Arc<Self>) -> crate::TurboTasksHandle {
         let ptr = Arc::into_raw(self) as *mut ();
         // Safety: `ptr` came from `Arc::into_raw` on a `TurboTasks<B>`,
         // which the `__tt_static_*` providers (in `turbo-tasks-backend`)
-        // know how to cast back to. When `static_handle` is off,
-        // `from_static_raw` panics; that's fine because none of the code
-        // paths that call us actually run without a backend linked.
+        // know how to cast back to.
         unsafe { crate::TurboTasksHandle::from_static_raw(std::ptr::NonNull::new_unchecked(ptr)) }
+    }
+
+    /// Fallback dynamic-dispatch variant of `make_handle` when the
+    /// `static_handle` feature is off. Requires the `dynamic_handle`
+    /// feature on `turbo-tasks` (activated by `turbo-tasks-testing`,
+    /// which everything that uses `TurboTasks<B>` in test mode pulls in
+    /// transitively).
+    #[cfg(all(not(feature = "static_handle"), feature = "dynamic_handle"))]
+    pub fn make_handle(self: Arc<Self>) -> crate::TurboTasksHandle {
+        crate::TurboTasksHandle::from_dynamic(self as Arc<dyn crate::TurboTasksApi>)
+    }
+
+    /// Stub for `make_handle` when neither dispatch feature is on. Lets
+    /// the `impl<B> TurboTasks<B>` block compile for crates that link
+    /// `turbo-tasks` for types alone (no test/bench harness involved).
+    /// Calling it at runtime panics.
+    #[cfg(not(any(feature = "static_handle", feature = "dynamic_handle")))]
+    pub fn make_handle(self: Arc<Self>) -> crate::TurboTasksHandle {
+        unreachable!(
+            "TurboTasks::make_handle requires either the `static_handle` or `dynamic_handle` \
+             feature on `turbo-tasks`"
+        )
     }
 
     /// Builds a [`TurboTasksHandle`] for this `TurboTasks<B>` instance.
