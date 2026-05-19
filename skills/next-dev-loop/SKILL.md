@@ -1,5 +1,5 @@
 ---
-name: dev-loop
+name: next-dev-loop
 description: >
   Verify Next.js runtime behavior after editing app code. Use this
   skill to confirm a change actually works in a running app — not
@@ -11,7 +11,7 @@ metadata:
   draft: true
 ---
 
-# dev-loop
+# next-dev-loop
 
 The edit/verify rhythm during `next dev` — make a change, then
 confirm it actually works at runtime, not just that the types or
@@ -124,5 +124,5 @@ loop.
 
 ---
 
-`dev-loop-<topic>` siblings (e.g. `dev-loop-rsc`, `dev-loop-debug`)
+`next-dev-loop-<topic>` siblings (e.g. `next-dev-loop-rsc`, `next-dev-loop-debug`)
 assume this preflight already ran; they pick up at the loop.
