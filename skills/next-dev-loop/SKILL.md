@@ -81,8 +81,11 @@ Four failure modes. Check each:
   browser errors both surface here).
 - **Behaves as intended** — `agent-browser` drives the page; assert
   what the user actually sees.
-- **Doesn't regress performance** — `agent-browser` for network and
-  timing data when the edit could affect runtime cost.
+- **React-level behavior** — `agent-browser` with react-devtools
+  enabled exposes the component tree, props, state, and render
+  counts. Anchor framework-level checks here (extra renders,
+  server/client boundary shifts, suspense fallbacks) — DOM asserts
+  alone miss them.
 
 Two views, four checks. They own different dimensions; consult
 both. Pick the specific tool from `tools/list` or `agent-browser
