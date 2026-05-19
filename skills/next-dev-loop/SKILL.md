@@ -32,14 +32,14 @@ The two views cross-check each other.
 
 ## requires
 
-- Next.js **16.0+** — the baseline `/_next/mcp` endpoint.
-- Next.js **16.3+** with **Turbopack** — for the proactive compile
-  check via `get_compilation_issues`.
+- Next.js **16.3+** with **Turbopack** — `/_next/mcp` plus the
+  proactive compile check via `get_compilation_issues`.
 - `agent-browser` **>= 0.27.0** — when React introspection landed.
 
-If anything is missing, tell the user how to upgrade and stop. Don't
-fall back to grepping source — this skill assumes both probes are
-live.
+These are hard floors, not soft preferences. If anything is missing,
+tell the user how to upgrade and stop. Don't fall back to grepping
+source or to a weaker probe — this skill assumes both views are live
+at the versions above.
 
 - Upgrade Next.js: `pnpm next upgrade` (or `npx next upgrade`).
   Docs: https://nextjs.org/docs/app/getting-started/upgrading
@@ -53,13 +53,12 @@ Once per session, confirm both views are live.
 
 1. POST `tools/list` to `/_next/mcp`.
    - Unreachable → either `next dev` isn't running, or Next.js is
-     below 16. Check `package.json` to disambiguate.
+     below 16.3. Check `package.json` to disambiguate, then refuse.
    - `get_compilation_issues` not in the list → Next.js below 16.3.
-     Tell the user; continue without proactive compile checks.
+     Refuse and tell the user to upgrade.
 2. `mcp get_compilation_issues` doubles as a Turbopack probe.
    An error response of `"Turbopack project is not available..."`
-   means the user is on webpack. Suggest Turbopack — it enables
-   this check and gives faster dev.
+   means the user is on webpack. Refuse — Turbopack is required.
 3. `mcp get_routes` → your route map for the rest of the session.
 
 ## loop
@@ -68,9 +67,8 @@ After an edit, you want to know three things: does it compile, did
 it actually land in the browser, and does the runtime match your
 intent? Each maps to one or both views.
 
-**Compilation**: `mcp get_compilation_issues` if available.
-Otherwise compile errors will surface per route after navigation,
-via `mcp get_errors`.
+**Compilation**: `mcp get_compilation_issues`. Preflight already
+guaranteed it's there.
 
 **Landing in the browser**: if no `agent-browser` session is open,
 open one against the user's installed Chrome with react-devtools
@@ -79,6 +77,14 @@ reload is the right call when verifying server-side changes (Server
 Components, route handlers, middleware, layouts, server actions); a
 soft client-router nav is the right call when verifying client-only
 behavior. Don't verify on a stale tab.
+
+Once a page has loaded, `mcp get_page_metadata` returns the files
+that actually rendered it — segments, layouts, server actions,
+client components. Use it as a discovery shortcut: load the route
+you're about to edit, ask which files power it, and treat those as
+entry points. This stays cheap as the codebase grows; agentic search
+across `app/` doesn't. The same applies to `get_server_action_by_id`
+for tracing a hashed action back to its source.
 
 **Matching intent**: ask both views the same question. Where they
 agree, the edit worked. Where they disagree, you're looking at a
@@ -96,22 +102,23 @@ real bug or a stale tab — reload and re-check.
 
 ## reference
 
-Floor = minimum Next.js version. If a tool isn't in `tools/list`,
-the user is below its floor.
+All tools below are present once preflight passes. If `tools/list`
+is missing any of them, preflight should have refused — re-check.
 
 ```
-# /_next/mcp                 floor   notes
-get_project_metadata         16.0    projectPath, devServerUrl, bundler
-get_routes                   16.0    fs-scan; no browser session needed
-get_errors                   16.0    runtime + build; needs a browser
-                                     session; includes browser-side errors
-                                     caught by the dev server
-get_page_metadata            16.0    segment trie + routerType; needs a
-                                     browser session
-get_logs                     16.0    returns logFilePath
-get_server_action_by_id      16.0    hashed id → file + functionName
-get_compilation_issues       16.3    Turbopack only; errors on webpack
-                                     ("Turbopack project is not available")
+# /_next/mcp                 notes
+get_project_metadata         projectPath, devServerUrl, bundler
+get_routes                   fs-scan; no browser session needed
+get_errors                   runtime + build; needs a browser session;
+                             includes browser-side errors caught by the
+                             dev server
+get_page_metadata            segment trie + routerType; needs a browser
+                             session; use as a discovery shortcut for
+                             which files power a route
+get_logs                     returns logFilePath
+get_server_action_by_id      hashed id → file + functionName
+get_compilation_issues       Turbopack only; errors on webpack
+                             ("Turbopack project is not available")
 ```
 
 For `agent-browser`, run `agent-browser --help`. The surface is
