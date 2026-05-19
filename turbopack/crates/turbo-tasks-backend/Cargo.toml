@@ -14,6 +14,20 @@ workspace = true
 
 [features]
 default = []
+
+# Emits `#[no_mangle] pub extern "Rust" fn __tt_static_*` providers for
+# the prod dispatch arm of `TurboTasksHandle` (see
+# `turbo_tasks::handle`). Activates `turbo-tasks/static_handle` so the
+# declarations and providers line up.
+#
+# Only the binary that actually runs prod turbo-tasks code (the
+# `next-napi-bindings` napi addon) should enable this. Activating
+# `static_handle` workspace-wide via feature unification would cause every
+# linked test binary to need to resolve the providers, but most don't
+# directly link `turbo-tasks-backend`. Explicit opt-in keeps the
+# linker-symbol contract a binary-by-binary concern.
+static_handle = ["turbo-tasks/static_handle"]
+
 print_cache_item_size_with_compressed = ["print_cache_item_size", "dep:lzzzz"]
 print_cache_item_size = []
 no_fast_stale = []
@@ -58,7 +72,7 @@ tracing = { workspace = true }
 turbo-bincode = { workspace = true }
 turbo-persistence = { workspace = true }
 turbo-rcstr = { workspace = true }
-turbo-tasks = { workspace = true, features = ["prod_handle"] }
+turbo-tasks = { workspace = true }
 turbo-tasks-hash = { workspace = true }
 turbo-tasks-malloc = { workspace = true, default-features = false }
 thread_local = { workspace = true }

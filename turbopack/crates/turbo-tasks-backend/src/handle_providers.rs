@@ -1,8 +1,8 @@
-//! `#[no_mangle] pub extern "Rust" fn __tt_prod_*` providers for the
+//! `#[no_mangle] pub extern "Rust" fn __tt_static_*` providers for the
 //! production arm of the `TurboTasksHandle` dispatch.
 //!
 //! The forward declarations live in `turbo_tasks::handle` and are gated by
-//! the `prod_handle` Cargo feature on `turbo-tasks`. `turbo-tasks-backend`
+//! the `static_handle` Cargo feature on `turbo-tasks`. `turbo-tasks-backend`
 //! activates that feature in its dep entry, so these `#[no_mangle]`
 //! symbols are linked into any binary that pulls in `turbo-tasks-backend`.
 //!
@@ -32,14 +32,14 @@ use crate::{NoopBackingStorage, TurboBackingStorage, TurboTasksBackend};
 pub type ProdHandleConcrete =
     turbo_tasks::TurboTasks<TurboTasksBackend<Either<TurboBackingStorage, NoopBackingStorage>>>;
 
-/// Generates `#[no_mangle] pub extern "Rust" fn __tt_prod_<name>(...)`
+/// Generates `#[no_mangle] pub extern "Rust" fn __tt_static_<name>(...)`
 /// for a single dispatched method, dispatched via method call syntax.
 macro_rules! provide_prod {
     (
         fn $name:ident( $($arg:ident : $ty:ty),* $(,)? ) $(-> $ret:ty)?
     ) => {
         #[unsafe(no_mangle)]
-        pub extern "Rust" fn ${concat(__tt_prod_, $name)}(
+        pub extern "Rust" fn ${concat(__tt_static_, $name)}(
             ptr: *const ()
             $(, $arg : $ty)*
         ) $(-> $ret)? {
@@ -61,7 +61,7 @@ macro_rules! provide_prod_trait {
         fn $name:ident( $($arg:ident : $ty:ty),* $(,)? ) $(-> $ret:ty)?
     ) => {
         #[unsafe(no_mangle)]
-        pub extern "Rust" fn ${concat(__tt_prod_, $name)}(
+        pub extern "Rust" fn ${concat(__tt_static_, $name)}(
             ptr: *const ()
             $(, $arg : $ty)*
         ) $(-> $ret)? {
@@ -186,7 +186,7 @@ provide_prod!(fn is_tracking_dependencies() -> bool);
 // the lifetime to `&self`. This is sound because the underlying Arc
 // (held by the handle) keeps the `TaskStatisticsApi` alive.
 #[unsafe(no_mangle)]
-pub extern "Rust" fn __tt_prod_task_statistics(
+pub extern "Rust" fn __tt_static_task_statistics(
     ptr: *const (),
 ) -> *const turbo_tasks::task_statistics::TaskStatisticsApi {
     let tt: &ProdHandleConcrete = unsafe { &*(ptr as *const ProdHandleConcrete) };
@@ -196,7 +196,7 @@ pub extern "Rust" fn __tt_prod_task_statistics(
 // ---- Arc clone / drop -----------------------------------------------------
 
 #[unsafe(no_mangle)]
-pub extern "Rust" fn __tt_prod_clone_arc(ptr: *const ()) {
+pub extern "Rust" fn __tt_static_clone_arc(ptr: *const ()) {
     // Bump the refcount of the Arc whose data pointer is `ptr`. The caller
     // (`<TurboTasksHandle as Clone>::clone`) is responsible for reusing
     // the same `ptr` value in the new handle, so we don't need to return
@@ -205,7 +205,7 @@ pub extern "Rust" fn __tt_prod_clone_arc(ptr: *const ()) {
 }
 
 #[unsafe(no_mangle)]
-pub extern "Rust" fn __tt_prod_drop_arc(ptr: *const ()) {
+pub extern "Rust" fn __tt_static_drop_arc(ptr: *const ()) {
     // Decrement the refcount; runs the destructor when it reaches zero.
     unsafe { Arc::<ProdHandleConcrete>::decrement_strong_count(ptr as *const ProdHandleConcrete) }
 }
@@ -213,7 +213,7 @@ pub extern "Rust" fn __tt_prod_drop_arc(ptr: *const ()) {
 // ---- Weak refcount providers ---------------------------------------------
 
 #[unsafe(no_mangle)]
-pub extern "Rust" fn __tt_prod_downgrade(arc_ptr: *const ()) -> *const () {
+pub extern "Rust" fn __tt_static_downgrade(arc_ptr: *const ()) -> *const () {
     // Reconstitute the Arc transiently to call `downgrade`, then leak the
     // Arc back so its refcount is unchanged. The Weak we produce owns its
     // own weak refcount.
@@ -224,7 +224,7 @@ pub extern "Rust" fn __tt_prod_downgrade(arc_ptr: *const ()) -> *const () {
 }
 
 #[unsafe(no_mangle)]
-pub extern "Rust" fn __tt_prod_upgrade(weak_ptr: *const ()) -> *const () {
+pub extern "Rust" fn __tt_static_upgrade(weak_ptr: *const ()) -> *const () {
     // Reconstitute the Weak transiently to attempt upgrade, then leak it
     // back so its refcount is unchanged.
     let weak = unsafe { ::std::sync::Weak::from_raw(weak_ptr as *const ProdHandleConcrete) };
@@ -237,7 +237,7 @@ pub extern "Rust" fn __tt_prod_upgrade(weak_ptr: *const ()) -> *const () {
 }
 
 #[unsafe(no_mangle)]
-pub extern "Rust" fn __tt_prod_clone_weak(weak_ptr: *const ()) {
+pub extern "Rust" fn __tt_static_clone_weak(weak_ptr: *const ()) {
     // `Weak` has no `increment_weak_count` API, so we round-trip through
     // `Weak::clone` and leak both copies.
     let weak = unsafe { ::std::sync::Weak::from_raw(weak_ptr as *const ProdHandleConcrete) };
@@ -247,6 +247,6 @@ pub extern "Rust" fn __tt_prod_clone_weak(weak_ptr: *const ()) {
 }
 
 #[unsafe(no_mangle)]
-pub extern "Rust" fn __tt_prod_drop_weak(weak_ptr: *const ()) {
+pub extern "Rust" fn __tt_static_drop_weak(weak_ptr: *const ()) {
     drop(unsafe { ::std::sync::Weak::from_raw(weak_ptr as *const ProdHandleConcrete) });
 }

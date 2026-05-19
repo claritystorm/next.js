@@ -2,21 +2,12 @@
 #![feature(box_patterns)]
 #![feature(macro_metavar_expr_concat)]
 
-// Force the linker to pull in `libturbo_tasks_testing.rlib` for the lib
-// test binary, so the `__tt_test_*` extern "Rust" providers (which the
-// lib references transitively through the dispatch in `turbo-tasks` —
-// `test_handle` is feature-unified-on whenever a dev-dep activates it)
-// are resolved at link time. Without this, cargo doesn't include the
-// `turbo-tasks-testing` rlib in the test binary's link command because
-// no Rust code references it by name.
-#[cfg(test)]
-extern crate turbo_tasks_testing;
-
 mod backend;
 mod backing_storage;
 mod data;
 mod database;
 mod error;
+#[cfg(feature = "static_handle")]
 mod handle_providers;
 mod kv_backing_storage;
 mod utils;

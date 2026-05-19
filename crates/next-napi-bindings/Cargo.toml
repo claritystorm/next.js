@@ -94,7 +94,7 @@ swc_plugin_backend_wasmtime = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 turbo-rcstr = { workspace = true, features = ["napi"] }
 turbo-tasks = { workspace = true }
-turbo-tasks-backend = { workspace = true }
+turbo-tasks-backend = { workspace = true, features = ["static_handle"] }
 turbo-tasks-fs = { workspace = true }
 turbo-unix-path = { workspace = true }
 next-api = { workspace = true, features = ["worker_pool"] }

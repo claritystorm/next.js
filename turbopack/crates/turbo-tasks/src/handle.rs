@@ -1,172 +1,200 @@
-//! Tagged-pointer dispatch for the turbo-tasks task-local.
+//! Devirtualized dispatch for the turbo-tasks task-local.
 //!
-//! The task-local that holds the current `TurboTasksApi` implementation has
-//! historically been an `Arc<dyn TurboTasksApi>`. The `dyn` is necessary
-//! because the prod handle (`TurboTasks<B>`) is generic over a backend
-//! type that the `task_local!` macro cannot name — but the cost is an
-//! indirect vtable call on every dispatched method, and rustc currently does
-//! not emit the LLVM metadata that `WholeProgramDevirt` needs to inline
-//! through trait objects ([rust#68262], [rust#45774]).
+//! The task-local that holds the current `TurboTasksApi` implementation
+//! has historically been an `Arc<dyn TurboTasksApi>`. The `dyn` is
+//! necessary because the prod implementor (`TurboTasks<B>`) is generic over a
+//! backend type that the `task_local!` macro cannot name — but the cost
+//! is an indirect vtable call on every dispatched method, and rustc
+//! currently does not emit the LLVM metadata that `WholeProgramDevirt`
+//! needs to inline through trait objects ([rust#68262], [rust#45774]).
 //!
 //! [rust#68262]: https://github.com/rust-lang/rust/issues/68262
 //! [rust#45774]: https://github.com/rust-lang/rust/issues/45774
 //!
-//! This module replaces the `dyn` indirection with a tagged pointer that
-//! dispatches through `extern "Rust"` forward declarations:
+//! This module replaces the production path's `dyn` with `extern "Rust"`
+//! direct calls. Under `lto = "thin"` + `codegen-units = 1` (this
+//! workspace's release profile), the static-arm `extern "Rust"` call
+//! inlines across the `turbo-tasks` → `turbo-tasks-backend` boundary,
+//! collapsing the `match` arm to a direct call to the underlying backend
+//! method.
 //!
 //! ```text
-//!  call site                                provider crate
+//!  call site (static feature active)        turbo-tasks-backend
 //! ┌──────────────────────────┐              ┌─────────────────────────────────────┐
-//! │ tt.invalidate(task) ─────┼──────────────► #[no_mangle] pub extern "Rust" fn   │
-//! │ match self.tag { … }      │              │ __tt_prod_invalidate(ptr, task) {  │
-//! │                          │              │   let tt: &TurboTasks<…> = …;      │
-//! │                          │              │   tt.invalidate(task)              │
-//! │                          │              │ }                                  │
+//! │ tt.invalidate(task)       │              │ #[no_mangle] pub extern "Rust" fn   │
+//! │   match self {            │              │ __tt_static_invalidate(ptr, task) {  │
+//! │     Static(ptr) => ───┐    │              │   let tt: &TurboTasks<…> = …;     │
+//! │     Dynamic(arc) => …  │   │              │   tt.invalidate(task)             │
+//! │   }                     └─────────────►  │ }                                  │
 //! └──────────────────────────┘              └─────────────────────────────────────┘
 //! ```
 //!
-//! Under `lto = "thin"` + `codegen-units = 1` (this workspace's release
-//! profile), the linker fully inlines the `extern "Rust"` call into the
-//! caller. The `match` over a one-arm enum collapses entirely; over a
-//! two-arm enum it compiles to `cmp + b.ne + direct call` and LLVM can
-//! sometimes fuse the arms further.
+//! For the dynamic arm:
+//! ```text
+//!  call site
+//! ┌──────────────────────────┐
+//! │ tt.invalidate(task)       │
+//! │   Dynamic(arc) =>         │
+//! │     arc.invalidate(task)  │  (normal vtable dispatch on Arc<dyn TurboTasksApi>)
+//! └──────────────────────────┘
+//! ```
 //!
 //! ## Feature gating
 //!
-//! Two Cargo features on `turbo-tasks` control which dispatch arms exist:
+//! Each variant is feature-gated. The gates exist to avoid linker-symbol
+//! breakage in crates that don't pull in the providing crate at link
+//! time. Names describe the *dispatch mechanism*, not the intended user:
+//! `VcStorage` from `turbo-tasks-testing` uses the dynamic arm because we
+//! don't want to wire its concrete type into the static dispatch surface,
+//! not because dynamic dispatch is inherently a "test" concept.
 //!
-//! - `prod_handle` — activated by `turbo-tasks-backend` (which owns the concrete production handle
-//!   type and emits the `__tt_prod_*` providers). Pulled in transitively by anything that links the
-//!   backend, including the napi binding.
-//! - `test_handle` — activated by `turbo-tasks-testing` (which owns `VcStorage` and emits the
-//!   `__tt_test_*` providers).
+//! - **`static_handle`** — activated by `turbo-tasks-backend`'s feature `static_handle` (which the
+//!   napi binding opts into). Adds the `Static` variant and the `extern "Rust"` forward
+//!   declarations. Any binary that activates `turbo-tasks-backend/static_handle` gets both the
+//!   feature on `turbo-tasks` and the `#[no_mangle]` provider definitions, so the externs resolve
+//!   cleanly at link time.
+//! - **`dynamic_handle`** — activated by `turbo-tasks-testing`'s dep on `turbo-tasks`. Adds the
+//!   `Dynamic` variant. Uses normal `Arc<dyn>` vtable dispatch, so there's no linker footgun if the
+//!   feature unifies on without the providing crate being linked.
 //!
-//! A pure-prod binary (e.g. the napi binding) sees `HandleTag` with only
-//! the `Prod` variant and the `match` in each forwarder collapses to a
-//! direct call. A workspace test build sees both variants and gets the
-//! two-arm match. Features unify across the dep graph; consumers do not
-//! enable the features directly.
+//! With neither feature active, `HandleInner` has a single `Unreachable`
+//! variant. This keeps the type inhabited (the `task_local!` declaration
+//! requires that) but unconstructible. Crates in this situation
+//! (`turbo-esregex`, `turbo-tasks-bytes` lib-tests, …) compile but cannot
+//! actually run turbo-tasks code — which is fine because they don't.
+//!
+//! ## Follow-ups
+//!
+//! - `task_statistics` is only used by `turbo-tasks-backend/tests/ task_statistics.rs`; if that
+//!   test calls it on a concrete `TurboTasks<B>` instead of via the handle, it can move off the
+//!   dispatch surface (no extern, no method on `TurboTasksHandle`).
+//! - `VcStorage` is the only reason the `dynamic_handle` feature exists. If `turbo-tasks-testing`'s
+//!   harness used a real `TurboTasks<B>` with a noop backend, the `Dynamic` variant could be
+//!   deleted entirely, collapsing the dispatch to a single `match` arm.
 
-use std::ptr::NonNull;
+use std::{ptr::NonNull, sync::Arc};
 
-/// Identifier for which concrete implementation a [`TurboTasksHandle`] points
-/// at. Used as the tag in the tagged-pointer dispatch.
-///
-/// Variants are feature-gated. A pure-prod build (only `prod_handle`
-/// active) has only the `Prod` variant, which makes every dispatch
-/// `match` a one-arm collapse — LLVM emits a direct call to the
-/// `__tt_prod_*` symbol with no comparison. The two-arm case (both
-/// features active, e.g. workspace tests) compiles to `cmp + b.ne +
-/// direct call`.
-///
-/// When neither feature is active (e.g. building `turbo-tasks` standalone
-/// or downstream consumers that only declare value types and don't link
-/// any backend), the only variant is `Unreachable` — `turbo-tasks`'s lib
-/// still compiles, but constructing or dispatching a handle is a
-/// `unreachable!()` panic. This is intentional: code that builds without
-/// either feature has no concrete implementation to dispatch to.
-#[repr(u8)]
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum HandleTag {
-    /// `TurboTasks<TurboTasksBackend<…>>` — the production handle used by
-    /// `next-napi-bindings`, benches, etc.
-    #[cfg(feature = "prod_handle")]
-    Prod = 0,
-    /// `VcStorage` — the test-only handle used by `turbo-tasks-testing`.
-    #[cfg(feature = "test_handle")]
-    Test = 1,
-    /// Placeholder variant kept only so the enum stays inhabited when
-    /// neither provider feature is active. Never constructed at runtime;
-    /// dispatch arms reach `unreachable!()`.
-    #[cfg(not(any(feature = "prod_handle", feature = "test_handle")))]
-    Unreachable = 255,
+#[cfg(any(feature = "static_handle", feature = "dynamic_handle"))]
+use crate::TurboTasksApi;
+
+/// Type-erased reference to a `TurboTasksApi` implementation. See the
+/// [module docs](self) for the dispatch design.
+pub struct TurboTasksHandle(HandleInner);
+
+enum HandleInner {
+    /// Statically-dispatched handle. The pointer is the data pointer of
+    /// an `Arc::into_raw(arc)` where `arc: Arc<TurboTasks<B>>` for the
+    /// concrete backend type the `__tt_static_*` providers were
+    /// generated for. Dispatch goes through `extern "Rust"` symbols
+    /// defined in `turbo-tasks-backend`.
+    #[cfg(feature = "static_handle")]
+    Static(NonNull<()>),
+    /// Dynamically-dispatched handle. Normal `Arc<dyn TurboTasksApi>`
+    /// vtable dispatch. Used by `VcStorage` and any other harness that
+    /// doesn't want to own a real `TurboTasks<B>`. Not on the production
+    /// hot path.
+    #[cfg(feature = "dynamic_handle")]
+    Dynamic(Arc<dyn TurboTasksApi>),
+    /// Placeholder variant kept so `HandleInner` stays inhabited when
+    /// neither feature is on. Constructing a handle requires a feature;
+    /// dispatch on this variant is `unreachable!()`. This lets
+    /// `turbo-tasks` compile standalone for crates that merely declare
+    /// value types and never construct a handle.
+    #[cfg(not(any(feature = "static_handle", feature = "dynamic_handle")))]
+    Unreachable,
 }
 
-/// A type-erased reference to a concrete `TurboTasksApi` implementation.
-///
-/// Logically equivalent to an `Arc<dyn TurboTasksApi>`: the pointer is the
-/// raw `Arc::into_raw(...)` of the concrete handle, the tag tells the
-/// dispatch which provider to call.
-///
-/// `Clone` and `Drop` route through `__tt_<arm>_clone_arc` /
-/// `__tt_<arm>_drop_arc` so refcounting stays correct.
-#[derive(Debug)]
-pub struct TurboTasksHandle {
-    tag: HandleTag,
-    /// Points at the inner of an `Arc<ConcreteHandle>` owned via
-    /// `Arc::into_raw`. The lifetime is managed by `Clone` / `Drop`
-    /// dispatching through the provider crate.
-    ptr: NonNull<()>,
+impl std::fmt::Debug for TurboTasksHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.0 {
+            #[cfg(feature = "static_handle")]
+            HandleInner::Static(ptr) => f
+                .debug_tuple("TurboTasksHandle::Static")
+                .field(ptr)
+                .finish(),
+            #[cfg(feature = "dynamic_handle")]
+            HandleInner::Dynamic(_) => f.debug_tuple("TurboTasksHandle::Dynamic").finish(),
+            #[cfg(not(any(feature = "static_handle", feature = "dynamic_handle")))]
+            HandleInner::Unreachable => f.write_str("TurboTasksHandle::Unreachable"),
+        }
+    }
 }
 
-// Safety: the underlying concrete handle types (`TurboTasks<…>` and
-// `VcStorage`) are themselves `Send + Sync` and are reference-counted via
-// `Arc`. The raw pointer is just an erased `Arc::into_raw` result; it does
-// not introduce additional aliasing beyond what the Arc allowed.
+// Safety: every concrete handle behind a `TurboTasksHandle` is itself
+// `Send + Sync` and reference-counted via `Arc`. For the `Static`
+// variant, the raw pointer is just an erased `Arc::into_raw`. The
+// `Dynamic` variant is `Arc<dyn TurboTasksApi + Send + Sync>` (the trait
+// bounds make it `Send + Sync`).
 unsafe impl Send for TurboTasksHandle {}
 unsafe impl Sync for TurboTasksHandle {}
 
 impl TurboTasksHandle {
-    /// Constructs a handle from raw parts. Intended to be called only by
-    /// `turbo-tasks-handle`'s `from_prod` / `from_test` constructors, which
-    /// own the safety contract that `ptr` is a valid `Arc::into_raw` pointer
-    /// for the concrete type associated with `tag`.
+    /// Construct a `Static` handle from an `Arc::into_raw` pointer.
     ///
     /// # Safety
     ///
-    /// `ptr` must be a pointer obtained from `Arc::into_raw` on the concrete
-    /// handle type whose tag matches `tag`. Ownership of the refcount
-    /// transfers into the new `TurboTasksHandle`.
+    /// `ptr` must come from `Arc::into_raw(arc)` where `arc` is an
+    /// `Arc<TurboTasks<B>>` for the concrete backend the
+    /// `__tt_static_*` providers (in `turbo-tasks-backend`) target.
+    /// Ownership of one strong refcount transfers into the handle.
+    #[cfg(feature = "static_handle")]
     #[inline]
-    pub unsafe fn from_raw_parts(tag: HandleTag, ptr: NonNull<()>) -> Self {
-        Self { tag, ptr }
+    pub unsafe fn from_static_raw(ptr: NonNull<()>) -> Self {
+        Self(HandleInner::Static(ptr))
     }
 
-    /// The tag indicating which concrete implementation this handle points
-    /// at. Exposed for tests and diagnostics; the dispatch macro handles
-    /// the normal case.
+    /// Stub for `from_static_raw` when the `static_handle` feature is off.
+    /// Cannot actually be constructed and called at runtime because the
+    /// dispatch paths that produce a static handle are gated on the same
+    /// feature; this is kept as a `panic!` body so the `TurboTasks<B>`
+    /// inherent `make_handle` (in `manager.rs`) can compile in builds
+    /// that don't activate `static_handle`. Linker dead-code elimination
+    /// removes both this and its callers from the final binary.
+    #[cfg(not(feature = "static_handle"))]
     #[inline]
-    pub fn tag(&self) -> HandleTag {
-        self.tag
+    pub unsafe fn from_static_raw(_ptr: NonNull<()>) -> Self {
+        unreachable!(
+            "TurboTasksHandle::from_static_raw called without `static_handle` feature on \
+             `turbo-tasks`"
+        )
     }
 
-    /// Raw pointer access, intended only for the dispatch macro and for
-    /// `turbo-tasks-handle`. Callers must respect the tag to interpret it.
+    /// Construct a `Dynamic` handle from any `TurboTasksApi` implementor.
+    #[cfg(feature = "dynamic_handle")]
     #[inline]
-    pub fn raw_ptr(&self) -> *const () {
-        self.ptr.as_ptr()
+    pub fn from_dynamic(arc: Arc<dyn TurboTasksApi>) -> Self {
+        Self(HandleInner::Dynamic(arc))
     }
 }
 
 // =====================================================================
-// `extern "Rust"` forward declarations.
+// `extern "Rust"` forward declarations for the static arm.
 //
-// Each dispatched `TurboTasksApi` method has two extern symbols — one per
-// arm. The bodies are defined in `turbo-tasks-handle` and resolved at link
-// time. Thin LTO inlines them.
+// The bodies are defined `#[no_mangle]` in `turbo-tasks-backend` and
+// resolved at link time. Thin LTO inlines them across the crate boundary.
 // =====================================================================
 
-/// Generates feature-gated `unsafe extern "Rust" { fn __tt_<arm>_<name>; }`
-/// declarations. With only `prod_handle` active, only the prod decl is
-/// emitted; with only `test_handle`, only the test decl. With both, both.
+/// Generates `unsafe extern "Rust" { fn __tt_static_<name>; }` declarations
+/// for one dispatched method. Only emitted when the `static_handle` feature
+/// is active — i.e. when `turbo-tasks-backend` is in the dep graph and
+/// will provide the matching `#[no_mangle]` definitions.
 macro_rules! tt_decl_extern {
     (
         fn $name:ident( $($arg:ident : $ty:ty),* $(,)? ) $(-> $ret:ty)?
     ) => {
+        #[cfg(feature = "static_handle")]
         unsafe extern "Rust" {
-            #[cfg(feature = "prod_handle")]
-            fn ${concat(__tt_prod_, $name)}(ptr: *const () $(, $arg : $ty)*) $(-> $ret)?;
-            #[cfg(feature = "test_handle")]
-            fn ${concat(__tt_test_, $name)}(ptr: *const () $(, $arg : $ty)*) $(-> $ret)?;
+            fn ${concat(__tt_static_, $name)}(ptr: *const () $(, $arg : $ty)*) $(-> $ret)?;
         }
     };
 }
 
-/// Generates an inherent method on `TurboTasksHandle` that dispatches over
-/// `match self.tag` to the corresponding `extern "Rust"` symbol. The match
-/// arms are feature-gated alongside the [`HandleTag`] variants and the
-/// extern decls, so single-variant builds get a one-arm match that LLVM
-/// collapses to a direct call.
+/// Generates an inherent method on `TurboTasksHandle` that dispatches via
+/// `match self.0`. The `Static` arm calls the `__tt_static_<name>` extern;
+/// the `Dynamic` arm (if present) calls the method on the `Arc<dyn
+/// TurboTasksApi>` (vtable dispatch). With no features active, the
+/// `Unreachable` arm panics — but you can't construct such a handle, so
+/// this is dead code that's kept only to make the type compile.
 macro_rules! tt_decl_handle_method {
     (
         fn $name:ident( $($arg:ident : $ty:ty),* $(,)? ) $(-> $ret:ty)?
@@ -175,18 +203,20 @@ macro_rules! tt_decl_handle_method {
             #[inline]
             #[allow(unused_variables)]
             pub fn $name(&self $(, $arg : $ty)*) $(-> $ret)? {
-                match self.tag {
-                    #[cfg(feature = "prod_handle")]
-                    HandleTag::Prod => unsafe {
-                        ${concat(__tt_prod_, $name)}(self.ptr.as_ptr() $(, $arg)*)
+                match &self.0 {
+                    #[cfg(feature = "static_handle")]
+                    HandleInner::Static(ptr) => unsafe {
+                        ${concat(__tt_static_, $name)}(ptr.as_ptr() $(, $arg)*)
                     },
-                    #[cfg(feature = "test_handle")]
-                    HandleTag::Test => unsafe {
-                        ${concat(__tt_test_, $name)}(self.ptr.as_ptr() $(, $arg)*)
-                    },
-                    #[cfg(not(any(feature = "prod_handle", feature = "test_handle")))]
-                    HandleTag::Unreachable => unreachable!(
-                        "TurboTasksHandle dispatch with neither `prod_handle` nor `test_handle` \
+                    // The `TurboTasksApi` super-trait bound on the Arc<dyn>
+                    // makes every dispatched method (whether defined on
+                    // `TurboTasksApi` itself or its supertrait
+                    // `TurboTasksCallApi`) callable via method-call syntax.
+                    #[cfg(feature = "dynamic_handle")]
+                    HandleInner::Dynamic(arc) => arc.$name($($arg),*),
+                    #[cfg(not(any(feature = "static_handle", feature = "dynamic_handle")))]
+                    HandleInner::Unreachable => unreachable!(
+                        "TurboTasksHandle dispatch with neither `static_handle` nor `dynamic_handle` \
                          feature active on `turbo-tasks`"
                     ),
                 }
@@ -197,11 +227,9 @@ macro_rules! tt_decl_handle_method {
 
 // ---- dispatched methods -------------------------------------------------
 //
-// Add new entries here when adding a method to the dispatch surface. Each
-// entry must also be implemented in `turbo-tasks-handle`'s provider macro
-// (which currently lists them explicitly — a future cleanup could share
-// this list via a callback macro, but for now duplication is the cost of
-// keeping both places easy to read).
+// Keep this list in sync with the matching provider implementations in
+// `turbo-tasks-backend/src/handle_providers.rs`. The list is duplicated;
+// a missing static provider surfaces as a link error.
 
 // `TurboTasksCallApi` methods.
 tt_decl_extern!(fn dynamic_call(
@@ -253,15 +281,6 @@ tt_decl_handle_method!(fn send_compilation_event(
 tt_decl_extern!(fn get_task_name(task: crate::TaskId) -> ::std::string::String);
 tt_decl_handle_method!(fn get_task_name(task: crate::TaskId) -> ::std::string::String);
 
-// `run`, `run_once`, `run_once_with_reason`, `start_once_process`, and
-// `stop_and_wait` need to be on the dispatch surface because the test
-// harness in `turbo-tasks-testing` constructs a type-erased
-// `TestInstance.tt: TurboTasksHandle` and passes it to the free
-// `turbo_tasks::run_once` / `turbo_tasks::run` helpers. Without these on
-// the handle, we'd have to either expose the concrete backend type
-// through `TestInstance` (cascades into `Registration`) or duplicate the
-// helpers per arm. Putting them on the dispatch surface is one extern
-// symbol per method per arm — cheap.
 tt_decl_extern!(fn run(
     future: ::std::pin::Pin<::std::boxed::Box<dyn ::std::future::Future<Output = ::anyhow::Result<()>> + ::core::marker::Send + 'static>>,
 ) -> ::std::pin::Pin<::std::boxed::Box<dyn ::std::future::Future<Output = ::core::result::Result<(), crate::backend::TurboTasksExecutionError>> + ::core::marker::Send>>);
@@ -440,15 +459,12 @@ tt_decl_handle_method!(fn is_tracking_dependencies() -> bool);
 
 // `task_statistics` returns `&TaskStatisticsApi` borrowed from `&self`.
 // The macro can't express the lifetime relationship through a `*const ()`
-// receiver, so the providers return `*const TaskStatisticsApi` and the
-// handle wrapper re-binds the lifetime to `&self`.
+// receiver, so the static provider returns `*const TaskStatisticsApi` and
+// the handle wrapper re-binds the lifetime to `&self`. The dynamic arm
+// just calls the trait method on the Arc.
+#[cfg(feature = "static_handle")]
 unsafe extern "Rust" {
-    #[cfg(feature = "prod_handle")]
-    fn __tt_prod_task_statistics(
-        ptr: *const (),
-    ) -> *const crate::task_statistics::TaskStatisticsApi;
-    #[cfg(feature = "test_handle")]
-    fn __tt_test_task_statistics(
+    fn __tt_static_task_statistics(
         ptr: *const (),
     ) -> *const crate::task_statistics::TaskStatisticsApi;
 }
@@ -456,75 +472,61 @@ unsafe extern "Rust" {
 impl TurboTasksHandle {
     #[inline]
     pub fn task_statistics(&self) -> &crate::task_statistics::TaskStatisticsApi {
-        // SAFETY: the provider returns a pointer to a `TaskStatisticsApi`
-        // owned by the underlying `TurboTasks<B>` / `VcStorage`, which the
-        // handle holds alive via its Arc. The returned reference is bound
-        // to `&self`.
-        let ptr: *const crate::task_statistics::TaskStatisticsApi = match self.tag {
-            #[cfg(feature = "prod_handle")]
-            HandleTag::Prod => unsafe { __tt_prod_task_statistics(self.ptr.as_ptr()) },
-            #[cfg(feature = "test_handle")]
-            HandleTag::Test => unsafe { __tt_test_task_statistics(self.ptr.as_ptr()) },
-            #[cfg(not(any(feature = "prod_handle", feature = "test_handle")))]
-            HandleTag::Unreachable => unreachable!(),
-        };
-        unsafe { &*ptr }
+        match &self.0 {
+            #[cfg(feature = "static_handle")]
+            HandleInner::Static(ptr) => {
+                // SAFETY: the provider returns a pointer to a
+                // `TaskStatisticsApi` owned by the underlying
+                // `TurboTasks<B>`, which this handle keeps alive via its
+                // Arc. The returned reference is bound to `&self`.
+                let p = unsafe { __tt_static_task_statistics(ptr.as_ptr()) };
+                unsafe { &*p }
+            }
+            #[cfg(feature = "dynamic_handle")]
+            HandleInner::Dynamic(arc) => arc.task_statistics(),
+            #[cfg(not(any(feature = "static_handle", feature = "dynamic_handle")))]
+            HandleInner::Unreachable => unreachable!(),
+        }
     }
 }
 
 // =====================================================================
-// Clone / Drop dispatch — Arc-style refcounting through extern symbols.
+// Clone / Drop — Arc refcounting through extern symbols (prod) or
+// the std `Arc` impls (test).
 // =====================================================================
 
+#[cfg(feature = "static_handle")]
 unsafe extern "Rust" {
-    #[cfg(feature = "prod_handle")]
-    fn __tt_prod_clone_arc(ptr: *const ());
-    #[cfg(feature = "prod_handle")]
-    fn __tt_prod_drop_arc(ptr: *const ());
-    #[cfg(feature = "test_handle")]
-    fn __tt_test_clone_arc(ptr: *const ());
-    #[cfg(feature = "test_handle")]
-    fn __tt_test_drop_arc(ptr: *const ());
+    fn __tt_static_clone_arc(ptr: *const ());
+    fn __tt_static_drop_arc(ptr: *const ());
 
-    // Weak-handle support. Each arm provides:
-    //   downgrade : *const Arc<T> -> *const Weak<T> (transfers no refcount,
-    //               creates a fresh Weak; caller owns the returned weak).
-    //   upgrade   : *const Weak<T> -> *const Arc<T> (returns null if the
-    //               Arc is gone; otherwise transfers one strong refcount).
+    // Weak-handle support for the static arm. Each provides:
+    //   downgrade : *const Arc<T> -> *const Weak<T> (creates a fresh
+    //               Weak; caller owns the returned weak).
+    //   upgrade   : *const Weak<T> -> *const Arc<T> (returns null if
+    //               the Arc is gone; otherwise transfers one strong
+    //               refcount).
     //   clone_weak: bumps the weak refcount.
     //   drop_weak : drops the weak refcount.
-    #[cfg(feature = "prod_handle")]
-    fn __tt_prod_downgrade(arc_ptr: *const ()) -> *const ();
-    #[cfg(feature = "prod_handle")]
-    fn __tt_prod_upgrade(weak_ptr: *const ()) -> *const ();
-    #[cfg(feature = "prod_handle")]
-    fn __tt_prod_clone_weak(weak_ptr: *const ());
-    #[cfg(feature = "prod_handle")]
-    fn __tt_prod_drop_weak(weak_ptr: *const ());
-    #[cfg(feature = "test_handle")]
-    fn __tt_test_downgrade(arc_ptr: *const ()) -> *const ();
-    #[cfg(feature = "test_handle")]
-    fn __tt_test_upgrade(weak_ptr: *const ()) -> *const ();
-    #[cfg(feature = "test_handle")]
-    fn __tt_test_clone_weak(weak_ptr: *const ());
-    #[cfg(feature = "test_handle")]
-    fn __tt_test_drop_weak(weak_ptr: *const ());
+    fn __tt_static_downgrade(arc_ptr: *const ()) -> *const ();
+    fn __tt_static_upgrade(weak_ptr: *const ()) -> *const ();
+    fn __tt_static_clone_weak(weak_ptr: *const ());
+    fn __tt_static_drop_weak(weak_ptr: *const ());
 }
 
 impl Clone for TurboTasksHandle {
     #[inline]
     fn clone(&self) -> Self {
-        match self.tag {
-            #[cfg(feature = "prod_handle")]
-            HandleTag::Prod => unsafe { __tt_prod_clone_arc(self.ptr.as_ptr()) },
-            #[cfg(feature = "test_handle")]
-            HandleTag::Test => unsafe { __tt_test_clone_arc(self.ptr.as_ptr()) },
-            #[cfg(not(any(feature = "prod_handle", feature = "test_handle")))]
-            HandleTag::Unreachable => unreachable!(),
-        }
-        Self {
-            tag: self.tag,
-            ptr: self.ptr,
+        match &self.0 {
+            #[cfg(feature = "static_handle")]
+            HandleInner::Static(ptr) => {
+                unsafe { __tt_static_clone_arc(ptr.as_ptr()) }
+                Self(HandleInner::Static(*ptr))
+            }
+            #[cfg(feature = "dynamic_handle")]
+            HandleInner::Dynamic(arc) => Self(HandleInner::Dynamic(Arc::clone(arc))),
+            #[cfg(not(any(feature = "static_handle", feature = "dynamic_handle")))]
+            HandleInner::Unreachable => unreachable!(),
         }
     }
 }
@@ -532,13 +534,14 @@ impl Clone for TurboTasksHandle {
 impl Drop for TurboTasksHandle {
     #[inline]
     fn drop(&mut self) {
-        match self.tag {
-            #[cfg(feature = "prod_handle")]
-            HandleTag::Prod => unsafe { __tt_prod_drop_arc(self.ptr.as_ptr()) },
-            #[cfg(feature = "test_handle")]
-            HandleTag::Test => unsafe { __tt_test_drop_arc(self.ptr.as_ptr()) },
-            #[cfg(not(any(feature = "prod_handle", feature = "test_handle")))]
-            HandleTag::Unreachable => unreachable!(),
+        match &self.0 {
+            #[cfg(feature = "static_handle")]
+            HandleInner::Static(ptr) => unsafe { __tt_static_drop_arc(ptr.as_ptr()) },
+            // Dynamic variant: the `Arc` field drops itself naturally.
+            #[cfg(feature = "dynamic_handle")]
+            HandleInner::Dynamic(_) => {}
+            #[cfg(not(any(feature = "static_handle", feature = "dynamic_handle")))]
+            HandleInner::Unreachable => {}
         }
     }
 }
@@ -547,20 +550,22 @@ impl TurboTasksHandle {
     /// Downgrades to a weak handle, equivalent to `Arc::downgrade`.
     #[inline]
     pub fn downgrade(&self) -> TurboTasksWeakHandle {
-        let weak_ptr = match self.tag {
-            #[cfg(feature = "prod_handle")]
-            HandleTag::Prod => unsafe { __tt_prod_downgrade(self.ptr.as_ptr()) },
-            #[cfg(feature = "test_handle")]
-            HandleTag::Test => unsafe { __tt_test_downgrade(self.ptr.as_ptr()) },
-            #[cfg(not(any(feature = "prod_handle", feature = "test_handle")))]
-            HandleTag::Unreachable => unreachable!(),
-        };
-        TurboTasksWeakHandle {
-            tag: self.tag,
-            // `downgrade` always produces a valid pointer (a `Weak` is never
-            // null even when the strong count is zero); we can safely
-            // `NonNull::new_unchecked` it.
-            ptr: unsafe { NonNull::new_unchecked(weak_ptr as *mut ()) },
+        match &self.0 {
+            #[cfg(feature = "static_handle")]
+            HandleInner::Static(ptr) => {
+                let weak_ptr = unsafe { __tt_static_downgrade(ptr.as_ptr()) };
+                // `Weak::into_raw` always produces a valid (non-null)
+                // pointer even when the strong count is zero.
+                TurboTasksWeakHandle(WeakInner::Static(unsafe {
+                    NonNull::new_unchecked(weak_ptr as *mut ())
+                }))
+            }
+            #[cfg(feature = "dynamic_handle")]
+            HandleInner::Dynamic(arc) => {
+                TurboTasksWeakHandle(WeakInner::Dynamic(Arc::downgrade(arc)))
+            }
+            #[cfg(not(any(feature = "static_handle", feature = "dynamic_handle")))]
+            HandleInner::Unreachable => unreachable!(),
         }
     }
 }
@@ -568,26 +573,42 @@ impl TurboTasksHandle {
 // =====================================================================
 // Weak-handle dispatch.
 //
-// Mirrors the strong-handle dispatch but holds the data pointer of a
-// `Weak<T>`. Used by long-lived non-task contexts (e.g. the filesystem
-// watcher in `turbo-tasks-fs`) that need to reach back into TurboTasks
-// without keeping it alive.
+// Used by long-lived non-task contexts (e.g. the filesystem watcher in
+// `turbo-tasks-fs`) that need to reach back into TurboTasks without
+// keeping it alive.
 // =====================================================================
 
 /// Weak counterpart to [`TurboTasksHandle`]. Constructed via
 /// [`TurboTasksHandle::downgrade`]; upgraded via
 /// [`TurboTasksWeakHandle::upgrade`].
-#[derive(Debug)]
-pub struct TurboTasksWeakHandle {
-    tag: HandleTag,
-    /// Points at the inner of a `Weak<ConcreteHandle>` owned via
-    /// `Weak::into_raw`. The strong count may be zero by the time we
-    /// try to upgrade.
-    ptr: NonNull<()>,
+pub struct TurboTasksWeakHandle(WeakInner);
+
+enum WeakInner {
+    #[cfg(feature = "static_handle")]
+    Static(NonNull<()>),
+    #[cfg(feature = "dynamic_handle")]
+    Dynamic(std::sync::Weak<dyn TurboTasksApi>),
+    #[cfg(not(any(feature = "static_handle", feature = "dynamic_handle")))]
+    Unreachable,
 }
 
-// Safety: as with `TurboTasksHandle`, the concrete weak pointer's data
-// is `Send + Sync` for any `T: Send + Sync`.
+impl std::fmt::Debug for TurboTasksWeakHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.0 {
+            #[cfg(feature = "static_handle")]
+            WeakInner::Static(ptr) => f
+                .debug_tuple("TurboTasksWeakHandle::Static")
+                .field(ptr)
+                .finish(),
+            #[cfg(feature = "dynamic_handle")]
+            WeakInner::Dynamic(_) => f.debug_tuple("TurboTasksWeakHandle::Dynamic").finish(),
+            #[cfg(not(any(feature = "static_handle", feature = "dynamic_handle")))]
+            WeakInner::Unreachable => f.write_str("TurboTasksWeakHandle::Unreachable"),
+        }
+    }
+}
+
+// Safety: same reasoning as for `TurboTasksHandle`.
 unsafe impl Send for TurboTasksWeakHandle {}
 unsafe impl Sync for TurboTasksWeakHandle {}
 
@@ -596,36 +617,37 @@ impl TurboTasksWeakHandle {
     /// concrete handle has been dropped.
     #[inline]
     pub fn upgrade(&self) -> Option<TurboTasksHandle> {
-        let strong_ptr = match self.tag {
-            #[cfg(feature = "prod_handle")]
-            HandleTag::Prod => unsafe { __tt_prod_upgrade(self.ptr.as_ptr()) },
-            #[cfg(feature = "test_handle")]
-            HandleTag::Test => unsafe { __tt_test_upgrade(self.ptr.as_ptr()) },
-            #[cfg(not(any(feature = "prod_handle", feature = "test_handle")))]
-            HandleTag::Unreachable => unreachable!(),
-        };
-        let strong_ptr = NonNull::new(strong_ptr as *mut ())?;
-        // Safety: the provider returned a non-null `Arc::into_raw` pointer
-        // for the concrete type indicated by `self.tag`. Ownership of one
-        // strong refcount transfers in.
-        Some(unsafe { TurboTasksHandle::from_raw_parts(self.tag, strong_ptr) })
+        match &self.0 {
+            #[cfg(feature = "static_handle")]
+            WeakInner::Static(ptr) => {
+                let strong = unsafe { __tt_static_upgrade(ptr.as_ptr()) };
+                let strong = NonNull::new(strong as *mut ())?;
+                // SAFETY: provider returned a valid `Arc::into_raw`
+                // pointer for the static concrete type, transferring one
+                // strong refcount.
+                Some(unsafe { TurboTasksHandle::from_static_raw(strong) })
+            }
+            #[cfg(feature = "dynamic_handle")]
+            WeakInner::Dynamic(weak) => weak.upgrade().map(TurboTasksHandle::from_dynamic),
+            #[cfg(not(any(feature = "static_handle", feature = "dynamic_handle")))]
+            WeakInner::Unreachable => unreachable!(),
+        }
     }
 }
 
 impl Clone for TurboTasksWeakHandle {
     #[inline]
     fn clone(&self) -> Self {
-        match self.tag {
-            #[cfg(feature = "prod_handle")]
-            HandleTag::Prod => unsafe { __tt_prod_clone_weak(self.ptr.as_ptr()) },
-            #[cfg(feature = "test_handle")]
-            HandleTag::Test => unsafe { __tt_test_clone_weak(self.ptr.as_ptr()) },
-            #[cfg(not(any(feature = "prod_handle", feature = "test_handle")))]
-            HandleTag::Unreachable => unreachable!(),
-        }
-        Self {
-            tag: self.tag,
-            ptr: self.ptr,
+        match &self.0 {
+            #[cfg(feature = "static_handle")]
+            WeakInner::Static(ptr) => {
+                unsafe { __tt_static_clone_weak(ptr.as_ptr()) }
+                Self(WeakInner::Static(*ptr))
+            }
+            #[cfg(feature = "dynamic_handle")]
+            WeakInner::Dynamic(weak) => Self(WeakInner::Dynamic(weak.clone())),
+            #[cfg(not(any(feature = "static_handle", feature = "dynamic_handle")))]
+            WeakInner::Unreachable => unreachable!(),
         }
     }
 }
@@ -633,13 +655,13 @@ impl Clone for TurboTasksWeakHandle {
 impl Drop for TurboTasksWeakHandle {
     #[inline]
     fn drop(&mut self) {
-        match self.tag {
-            #[cfg(feature = "prod_handle")]
-            HandleTag::Prod => unsafe { __tt_prod_drop_weak(self.ptr.as_ptr()) },
-            #[cfg(feature = "test_handle")]
-            HandleTag::Test => unsafe { __tt_test_drop_weak(self.ptr.as_ptr()) },
-            #[cfg(not(any(feature = "prod_handle", feature = "test_handle")))]
-            HandleTag::Unreachable => unreachable!(),
+        match &self.0 {
+            #[cfg(feature = "static_handle")]
+            WeakInner::Static(ptr) => unsafe { __tt_static_drop_weak(ptr.as_ptr()) },
+            #[cfg(feature = "dynamic_handle")]
+            WeakInner::Dynamic(_) => {}
+            #[cfg(not(any(feature = "static_handle", feature = "dynamic_handle")))]
+            WeakInner::Unreachable => {}
         }
     }
 }

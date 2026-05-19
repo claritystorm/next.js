@@ -1,12 +1,6 @@
 #![feature(arbitrary_self_types)]
 #![feature(arbitrary_self_types_pointers)]
 
-// Force linkage of `__tt_test_*` providers. See similar comment in
-// `tests/eviction.rs`. Benches don't use `turbo_tasks_testing` directly
-// but the feature-unified `test_handle` decl exists, so the binary
-// needs the test-arm providers linked.
-extern crate turbo_tasks_testing;
-
 use criterion::{Criterion, criterion_group, criterion_main};
 
 pub(crate) mod overhead;
