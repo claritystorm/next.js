@@ -225,6 +225,14 @@ export default class NextNodeServer extends BaseServer<
     if (this.nextConfig.experimental.useNodeStreams) {
       process.env.__NEXT_USE_NODE_STREAMS = 'true'
     }
+    if (
+      (isDev || process.env.__NEXT_DEV_SERVER) &&
+      this.nextConfig.experimental.requestInsights
+    ) {
+      process.env.__NEXT_REQUEST_INSIGHTS = 'true'
+    } else {
+      delete process.env.__NEXT_REQUEST_INSIGHTS
+    }
 
     if (!this.minimalMode) {
       this.imageResponseCache = new ResponseCache(this.minimalMode)
