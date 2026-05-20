@@ -20,8 +20,6 @@ use std::sync::Arc;
 
 use turbo_tasks::{TurboTasksApi as _, TurboTasksCallApi as _};
 
-use crate::{ProdBackingStorage, TurboTasksBackend};
-
 /// The concrete prod handle type. The `__tt_static_*` providers below
 /// cast each opaque `*const ()` receiver to `&ProdHandleConcrete`, so
 /// any `Arc<TurboTasks<TurboTasksBackend<_>>>` that goes into a
@@ -29,7 +27,11 @@ use crate::{ProdBackingStorage, TurboTasksBackend};
 /// exact type. Mismatch is undefined behavior. See
 /// [`crate::ProdBackingStorage`] for why the storage type is wrapped in
 /// `Either`.
-pub type ProdHandleConcrete = turbo_tasks::TurboTasks<TurboTasksBackend<ProdBackingStorage>>;
+pub type ProdHandleConcrete = turbo_tasks::TurboTasks<
+    crate::TurboTasksBackend<
+        crate::KeyValueDatabaseBackingStorage<crate::database::turbo::TurboKeyValueDatabase>,
+    >,
+>;
 
 /// Generates `#[no_mangle] pub extern "Rust" fn __tt_static_<name>(...)`
 /// for a single dispatched method, dispatched via method call syntax.

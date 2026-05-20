@@ -13,10 +13,7 @@
         storage_mode: Some(turbo_tasks_backend::StorageMode::ReadWriteOnShutdown),
         ..Default::default()
       },
-      // Wrapped via `prod_backing_storage_turbo` to match
-      // `ProdBackingStorage` — see the rationale in
-      // `turbo-tasks-backend/tests/test_config.trs`.
-      turbo_tasks_backend::prod_backing_storage_turbo(turbo_tasks_backend::turbo_backing_storage(
+      turbo_tasks_backend::turbo_backing_storage(
         path.as_path(),
         &turbo_tasks_backend::GitVersionInfo {
           describe: "test-unversioned",
@@ -25,7 +22,7 @@
         false,
         true,
         false,
-      ).unwrap().0)
+      ).unwrap().0
     )
   )
 }

@@ -14,12 +14,7 @@
         storage_mode: Some(turbo_tasks_backend::StorageMode::ReadWriteOnShutdown),
         ..Default::default()
       },
-      // Wrapped via `prod_backing_storage_turbo` to match
-      // `ProdBackingStorage` — the concrete type the `__tt_static_*`
-      // providers are monomorphized for. A bare `TurboBackingStorage`
-      // would produce a different `TurboTasks<TurboTasksBackend<…>>`
-      // and the providers' pointer cast would be UB at runtime.
-      turbo_tasks_backend::prod_backing_storage_turbo(turbo_tasks_backend::turbo_backing_storage(
+      turbo_tasks_backend::turbo_backing_storage(
         path.as_path(),
         &turbo_tasks_backend::GitVersionInfo {
           describe: "test-unversioned",
@@ -28,7 +23,7 @@
         false,
         true,
         false,
-      ).unwrap().0)
+      ).unwrap().0
     )
   )
 }

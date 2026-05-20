@@ -3,9 +3,7 @@ use criterion::{BenchmarkId, Criterion};
 use turbo_tasks::{
     TryJoinIterExt, TurboTasks, Vc, unmark_top_level_task_may_leak_eventually_consistent_state,
 };
-use turbo_tasks_backend::{
-    BackendOptions, TurboTasksBackend, noop_backing_storage, prod_backing_storage_noop,
-};
+use turbo_tasks_backend::{BackendOptions, TurboTasksBackend, noop_backing_storage};
 
 pub fn fibonacci(c: &mut Criterion) {
     if matches!(
@@ -38,8 +36,7 @@ pub fn fibonacci(c: &mut Criterion) {
                         storage_mode: None,
                         ..Default::default()
                     },
-                    // Wrap to match `ProdBackingStorage`.
-                    prod_backing_storage_noop(noop_backing_storage()),
+                    noop_backing_storage(),
                 ));
                 async move {
                     tt.run(async move {
