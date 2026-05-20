@@ -7,7 +7,6 @@ mod backing_storage;
 mod data;
 mod database;
 mod error;
-#[cfg(feature = "static_handle")]
 mod handle_providers;
 mod kv_backing_storage;
 mod utils;

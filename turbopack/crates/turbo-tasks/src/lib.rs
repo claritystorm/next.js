@@ -12,6 +12,13 @@
 #![feature(const_type_name)]
 #![feature(macro_metavar_expr_concat)]
 
+// Force linking `turbo-tasks-backend`'s `__tt_static_*` providers into
+// this crate's test/bench binaries (the circular dev-dep is declared in
+// `Cargo.toml`). rustc only adds rlibs to the link command for crates
+// Rust code references — this `extern crate` is the reference.
+#[cfg(test)]
+extern crate turbo_tasks_backend;
+
 pub mod backend;
 mod capture_future;
 mod collectibles;

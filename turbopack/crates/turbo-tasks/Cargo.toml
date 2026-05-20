@@ -4,6 +4,9 @@ version = "0.1.0"
 description = "TBD"
 license = "MIT"
 edition = "2024"
+# Disable auto-discovery of bench targets so `benches/scope.rs` is
+# treated as a module of `benches/mod.rs` rather than a separate bench.
+autobenches = false
 
 [lib]
 bench = false
@@ -14,27 +17,6 @@ tokio_tracing = ["tokio/tracing"]
 hanging_detection = []
 task_id_details = []
 verify_determinism = []
-
-# Adds the devirtualized `Prod` arm to `TurboTasksHandle`, dispatching
-# via `#[no_mangle] pub extern "Rust" fn __tt_static_*` symbols defined in
-# `turbo-tasks-backend`. Activated by `turbo-tasks-backend`'s dep on
-# `turbo-tasks`. Only binaries whose link graph includes
-# `turbo-tasks-backend` can resolve the externs, which is also exactly
-# the situation where the prod arm is meaningful to call.
-#
-# Crates that don't link `turbo-tasks-backend` (the workspace has many —
-# `turbo-esregex`, `turbo-tasks-fs`'s lib-tests, etc.) compile without
-# this feature: `TurboTasksHandle` falls back to `Arc<dyn TurboTasksApi>`
-# vtable dispatch through the `Test` variant. Since those crates never
-# actually run prod tasks, the perf delta is moot.
-static_handle = []
-
-# Adds the `Test` variant to `TurboTasksHandle`, which dispatches via
-# `Arc<dyn TurboTasksApi>` vtable. Activated by `turbo-tasks-testing`'s
-# dep on `turbo-tasks`. The test arm uses normal Rust vtable dispatch,
-# so there's no linker-symbol footgun if the feature unifies on without
-# the providing crate being directly linked.
-dynamic_handle = []
 
 # TODO(bgw): This feature is here to unblock turning on local tasks by default. It's only turned on
 # in unit tests. This will be removed very soon.
@@ -82,6 +64,10 @@ unsize = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true, features = ["async_tokio"] }
+# Circular dev-dep — Cargo allows it. Pulls in the `__tt_static_*`
+# providers so this crate's test/bench binaries can link. See the
+# matching `extern crate` in `src/lib.rs` and `benches/mod.rs`.
+turbo-tasks-backend = { workspace = true }
 
 [[bench]]
 name = "mod"

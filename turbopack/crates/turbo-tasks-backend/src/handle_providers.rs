@@ -1,10 +1,10 @@
 //! `#[no_mangle] pub extern "Rust" fn __tt_static_*` providers for the
-//! production arm of the `TurboTasksHandle` dispatch.
+//! `TurboTasksHandle` dispatch.
 //!
-//! The forward declarations live in `turbo_tasks::handle` and are gated by
-//! the `static_handle` Cargo feature on `turbo-tasks`. `turbo-tasks-backend`
-//! activates that feature in its dep entry, so these `#[no_mangle]`
-//! symbols are linked into any binary that pulls in `turbo-tasks-backend`.
+//! The forward declarations live in `turbo_tasks::handle`. Both sides
+//! are unconditional — any binary that links `libturbo_tasks.rlib`
+//! must also link `libturbo_tasks_backend.rlib` so the linker can
+//! resolve the externs.
 //!
 //! Each provider:
 //! 1. Casts the opaque `*const ()` receiver back to `&ProdHandleConcrete` (the production handle
@@ -12,7 +12,7 @@
 //! 2. Calls the trait method on the concrete type.
 //!
 //! Under thin LTO + `codegen-units = 1`, every step inlines into the
-//! caller and the dispatch shape is `match tag => direct call` with no
+//! caller and the dispatch shape is `direct call` with no
 //! indirect calls. See `turbo_tasks::handle` for the experiment that
 //! verified this.
 
