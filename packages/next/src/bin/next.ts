@@ -32,6 +32,7 @@ import type { NextAnalyzeOptions } from '../cli/next-analyze.js'
 import type { NextBuildOptions } from '../cli/next-build.js'
 import type { NextTypegenOptions } from '../cli/next-typegen.js'
 import type { NextPostBuildOptions } from '../cli/next-post-build.js'
+import type { NextDiagnoseOptions } from '../cli/next-diagnose.js'
 import { mkdirSync } from 'fs'
 
 if (process.env.NEXT_RSPACK) {
@@ -585,6 +586,22 @@ program
     }
   )
   .usage('[directory] [options]')
+
+program
+  .command('experimental-diagnose')
+  .description(
+    'Inspect experimental Request Insights from a running Next.js dev server.'
+  )
+  .option(
+    '--url <url>',
+    'URL of the running Next.js dev server. Defaults to http://localhost:3000.'
+  )
+  .option('--json', 'Print raw request insight JSON.')
+  .action((options: NextDiagnoseOptions) => {
+    return import('../cli/next-diagnose.js').then((mod) =>
+      mod.nextDiagnose(options)
+    )
+  })
 
 const internal = program
   .command('internal')
